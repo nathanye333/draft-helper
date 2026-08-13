@@ -56,12 +56,31 @@ export function ChatPanel({ draftId }: { draftId: string }) {
   const [modelsLoading, setModelsLoading] = useState(false);
   const [modelsError, setModelsError] = useState<string | null>(null);
   const [modelsSource, setModelsSource] = useState<"live" | "fallback">("fallback");
+  const [hasServerOpenAiKey, setHasServerOpenAiKey] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const scanSeq = useRef(0);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, busy]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetch("/api/llm/models");
+        const data = (await res.json()) as { ok?: boolean; hasServerOpenAiKey?: boolean };
+        if (!cancelled && res.ok && data.ok) {
+          setHasServerOpenAiKey(Boolean(data.hasServerOpenAiKey));
+        }
+      } catch {
+        if (!cancelled) setHasServerOpenAiKey(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   async function scanModels(opts?: { silent?: boolean }) {
     const seq = ++scanSeq.current;
@@ -160,12 +179,15 @@ export function ChatPanel({ draftId }: { draftId: string }) {
     return modelOptions;
   }, [modelOptions, settings.model]);
 
+  const needsClientOpenAiKey =
+    settings.provider === "openai" && !settings.apiKey.trim() && !hasServerOpenAiKey;
+
   const canSend = useMemo(() => {
     if (!input.trim() || busy) return false;
     if (!settings.model.trim()) return false;
-    if (settings.provider === "openai" && !settings.apiKey.trim()) return false;
+    if (needsClientOpenAiKey) return false;
     return true;
-  }, [input, busy, settings]);
+  }, [input, busy, settings.model, needsClientOpenAiKey]);
 
   function updateSettings(patch: Partial<StoredLlmSettings>) {
     persistSettings({ ...settings, ...patch });
@@ -264,7 +286,12 @@ export function ChatPanel({ draftId }: { draftId: string }) {
                 type="button"
                 variant="ghost"
                 size="sm"
-                disabled={modelsLoading || (settings.provider === "openai" && !settings.apiKey.trim())}
+                disabled={
+                  modelsLoading ||
+                  (settings.provider === "openai" &&
+                    !settings.apiKey.trim() &&
+                    !hasServerOpenAiKey)
+                }
                 onClick={() => void scanModels()}
               >
                 {modelsLoading ? "Scanning…" : "Refresh"}
@@ -306,7 +333,8 @@ export function ChatPanel({ draftId }: { draftId: string }) {
 
           <div className="space-y-1.5">
             <Label htmlFor="llm-key">
-              API key {settings.provider === "ollama" ? "(optional)" : ""}
+              API key{" "}
+              {settings.provider === "ollama" || hasServerOpenAiKey ? "(optional)" : ""}
             </Label>
             <Input
               id="llm-key"
@@ -314,8 +342,17 @@ export function ChatPanel({ draftId }: { draftId: string }) {
               autoComplete="off"
               value={settings.apiKey}
               onChange={(e) => updateSettings({ apiKey: e.target.value })}
-              placeholder={settings.provider === "ollama" ? "Usually blank" : "sk-…"}
+              placeholder={
+                settings.provider === "ollama"
+                  ? "Usually blank"
+                  : hasServerOpenAiKey
+                    ? "Leave blank to use account default"
+                    : "sk-…"
+              }
             />
+            {settings.provider === "openai" && hasServerOpenAiKey && !settings.apiKey.trim() ? (
+              <p className="text-xs text-emerald-500/90">Using your account&apos;s server default key.</p>
+            ) : null}
           </div>
 
           {settings.provider === "ollama" ? (

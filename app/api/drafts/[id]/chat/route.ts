@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { runDraftChatAgent } from "@/lib/agent/create-agent";
+import { resolveOpenAiApiKey } from "@/lib/agent/server-llm";
 import { fetchDraftBundle } from "@/lib/draft/data";
 import { createClient } from "@/lib/supabase/server";
 
@@ -49,9 +50,13 @@ export async function POST(
     );
   }
 
-  const { messages, provider, model, baseUrl, apiKey } = parsed.data;
+  const { messages, provider, model, baseUrl, apiKey: clientApiKey } = parsed.data;
+  const apiKey =
+    provider === "openai"
+      ? resolveOpenAiApiKey(user.email, clientApiKey)
+      : clientApiKey?.trim() || undefined;
 
-  if (provider === "openai" && !apiKey?.trim()) {
+  if (provider === "openai" && !apiKey) {
     return NextResponse.json(
       { ok: false, message: "apiKey is required for the openai provider" },
       { status: 400 },
