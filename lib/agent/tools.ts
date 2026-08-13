@@ -85,6 +85,9 @@ export function createDraftTools(draftId: string) {
         tier: input.tier,
         nflTeam: input.nflTeam,
         byeWeek: input.byeWeek,
+        draftYear: input.draftYear,
+        draftYearMin: input.draftYearMin,
+        draftYearMax: input.draftYearMax,
         projPointsMin: input.projPointsMin,
         projPointsMax: input.projPointsMax,
         adpValueMin: input.adpValueMin,
@@ -98,7 +101,7 @@ export function createDraftTools(draftId: string) {
     {
       name: "query_players",
       description:
-        "SQL-shaped filter+sort over cached draft rankings/projections. Sort by ADP, ECR, projPoints, adpValue, rushYds, receptions, etc.",
+        "SQL-shaped filter+sort over cached draft rankings/projections. Sort by ADP, ECR, projPoints, adpValue, draftYear, rushYds, receptions, etc.",
       schema: z.object({
         nameContains: z.string().optional().describe("Case-insensitive substring match on player name"),
         position: positionSchema.optional(),
@@ -110,6 +113,9 @@ export function createDraftTools(draftId: string) {
         tier: z.number().optional(),
         nflTeam: z.string().optional().describe("NFL team abbreviation substring, e.g. KC"),
         byeWeek: z.number().int().optional(),
+        draftYear: z.number().int().optional().describe("Exact NFL draft / rookie year"),
+        draftYearMin: z.number().int().optional().describe("Minimum draft year inclusive"),
+        draftYearMax: z.number().int().optional().describe("Maximum draft year inclusive"),
         projPointsMin: z.number().optional(),
         projPointsMax: z.number().optional(),
         adpValueMin: z.number().optional().describe("Minimum ADP−ECR value (positive = falling)"),
@@ -137,9 +143,9 @@ export function createDraftTools(draftId: string) {
     {
       name: "aggregate_players",
       description:
-        "Group players by position, tier, NFL team, or bye week with counts and min/avg/max for a metric (adp, ecr, projPoints, adpValue).",
+        "Group players by position, tier, NFL team, bye week, or NFL draft year with counts and min/avg/max for a metric (adp, ecr, projPoints, adpValue).",
       schema: z.object({
-        groupBy: z.enum(["position", "tier", "nflTeam", "byeWeek"]),
+        groupBy: z.enum(["position", "tier", "nflTeam", "byeWeek", "draftYear"]),
         availableOnly: z.boolean().optional(),
         metric: z.enum(["adp", "ecr", "projPoints", "adpValue"]).optional().default("adp"),
       }),

@@ -8,6 +8,8 @@ export interface PlayerRow {
   position: Position;
   nflTeam: string | null;
   byeWeek: number | null;
+  /** NFL draft / rookie class year. */
+  draftYear: number | null;
   rankAdp: number | null;
   rankEcr: number | null;
   rankMin: number | null;
@@ -43,6 +45,7 @@ export const PLAYER_SORT_COLUMNS = [
   "rankMax",
   "rankStd",
   "byeWeek",
+  "draftYear",
   "passYds",
   "passTds",
   "rushYds",
@@ -67,6 +70,9 @@ export interface QueryPlayersParams {
   tier?: number;
   nflTeam?: string;
   byeWeek?: number;
+  draftYear?: number;
+  draftYearMin?: number;
+  draftYearMax?: number;
   projPointsMin?: number;
   projPointsMax?: number;
   adpValueMin?: number;
@@ -77,7 +83,7 @@ export interface QueryPlayersParams {
   includeProjStats?: boolean;
 }
 
-export type AggregateGroupBy = "position" | "tier" | "nflTeam" | "byeWeek";
+export type AggregateGroupBy = "position" | "tier" | "nflTeam" | "byeWeek" | "draftYear";
 export type AggregateMetric = "adp" | "ecr" | "projPoints" | "adpValue";
 
 export interface AggregatePlayersParams {
@@ -103,6 +109,11 @@ export const DATASET_COLUMNS = [
   { name: "position", type: "enum", description: "QB|RB|WR|TE|K|DST" },
   { name: "nflTeam", type: "string", description: "NFL team abbreviation" },
   { name: "byeWeek", type: "number", description: "Bye week" },
+  {
+    name: "draftYear",
+    type: "number",
+    description: "NFL draft / rookie class year (e.g. 2023); null for DST / unmatched",
+  },
   { name: "rankAdp", type: "number", description: "Consensus ADP (lower = drafted earlier)" },
   { name: "rankEcr", type: "number", description: "Expert consensus rank (lower = better)" },
   { name: "rankMin", type: "number", description: "Best expert rank" },
@@ -151,6 +162,7 @@ export function buildPlayerRows(bundle: DraftBundle): PlayerRow[] {
       position: r.players.position,
       nflTeam: r.players.nfl_team,
       byeWeek: r.players.bye_week,
+      draftYear: r.players.draft_year ?? null,
       rankAdp,
       rankEcr,
       rankMin: r.rank_min,
@@ -203,6 +215,8 @@ function sortValue(row: PlayerRow, orderBy: PlayerOrderBy): number | string | nu
       return row.rankStd;
     case "byeWeek":
       return row.byeWeek;
+    case "draftYear":
+      return row.draftYear;
     case "passYds":
       return row.passYds;
     case "passTds":
@@ -260,6 +274,9 @@ export function queryPlayers(rows: PlayerRow[], params: QueryPlayersParams): Pla
     tier,
     nflTeam,
     byeWeek,
+    draftYear,
+    draftYearMin,
+    draftYearMax,
     projPointsMin,
     projPointsMax,
     adpValueMin,
@@ -283,6 +300,9 @@ export function queryPlayers(rows: PlayerRow[], params: QueryPlayersParams): Pla
     if (ecrMax != null && (row.rankEcr == null || row.rankEcr > ecrMax)) return false;
     if (tier != null && row.tier !== tier) return false;
     if (byeWeek != null && row.byeWeek !== byeWeek) return false;
+    if (draftYear != null && row.draftYear !== draftYear) return false;
+    if (draftYearMin != null && (row.draftYear == null || row.draftYear < draftYearMin)) return false;
+    if (draftYearMax != null && (row.draftYear == null || row.draftYear > draftYearMax)) return false;
     if (projPointsMin != null && (row.projPoints == null || row.projPoints < projPointsMin)) return false;
     if (projPointsMax != null && (row.projPoints == null || row.projPoints > projPointsMax)) return false;
     if (adpValueMin != null && (row.adpValue == null || row.adpValue < adpValueMin)) return false;
@@ -335,6 +355,8 @@ export function aggregatePlayers(
     if (params.groupBy === "position") key = row.position;
     else if (params.groupBy === "tier") key = row.tier != null ? String(row.tier) : "unranked";
     else if (params.groupBy === "byeWeek") key = row.byeWeek != null ? String(row.byeWeek) : "unknown";
+    else if (params.groupBy === "draftYear")
+      key = row.draftYear != null ? String(row.draftYear) : "unknown";
     else key = row.nflTeam ?? "FA";
 
     const bucket = buckets.get(key) ?? { count: 0, values: [] };

@@ -9,6 +9,9 @@ const fpPlayerSchema = z.object({
   player_team_id: z.string().nullable().optional(),
   player_position_id: z.string(),
   player_bye_week: z.union([z.number(), z.string()]).nullable().optional(),
+  /** Sportradar UUID — used to join NFL draft / rookie year from Sleeper. */
+  sportsdata_id: z.string().nullable().optional(),
+  player_yahoo_id: z.union([z.number(), z.string()]).nullable().optional(),
   rank_ecr: z.union([z.number(), z.string()]).transform((v) => Number(v)),
   rank_min: z.union([z.number(), z.string()]).nullable().optional(),
   rank_max: z.union([z.number(), z.string()]).nullable().optional(),

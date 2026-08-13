@@ -11,6 +11,7 @@ function row(partial: Partial<PlayerRow> & Pick<PlayerRow, "fpPlayerId" | "name"
   return {
     nflTeam: null,
     byeWeek: null,
+    draftYear: null,
     rankAdp: null,
     rankEcr: null,
     rankMin: null,
@@ -134,12 +135,16 @@ describe("queryPlayers", () => {
     ]);
   });
 
-  it("supports name substring and ecr ordering", () => {
-    const result = queryPlayers(rows, {
-      nameContains: "jeff",
-      orderBy: "ecr",
-    });
-    expect(result.map((r) => r.name)).toEqual(["Justin Jefferson"]);
+  it("filters and sorts by NFL draft year", () => {
+    const withYears = [
+      row({ fpPlayerId: "10", name: "Rookie A", position: "RB", draftYear: 2025, rankAdp: 20 }),
+      row({ fpPlayerId: "11", name: "Vet B", position: "RB", draftYear: 2019, rankAdp: 15 }),
+      row({ fpPlayerId: "12", name: "Mid C", position: "WR", draftYear: 2022, rankAdp: 30 }),
+    ];
+    const rookies = queryPlayers(withYears, { draftYearMin: 2024, orderBy: "draftYear", orderDir: "desc" });
+    expect(rookies.map((r) => r.name)).toEqual(["Rookie A"]);
+    const byYear = queryPlayers(withYears, { orderBy: "draftYear", orderDir: "asc", limit: 3 });
+    expect(byYear.map((r) => r.draftYear)).toEqual([2019, 2022, 2025]);
   });
 });
 

@@ -42,6 +42,8 @@ export interface Player {
   position: Position;
   nfl_team: string | null;
   bye_week: number | null;
+  /** NFL draft / rookie class year (null for DST / unmatched). */
+  draft_year: number | null;
   created_at: string;
   updated_at: string;
 }

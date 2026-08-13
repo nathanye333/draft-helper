@@ -8,6 +8,7 @@ export interface AvailablePlayerVM {
   position: Position;
   nflTeam: string | null;
   byeWeek: number | null;
+  draftYear: number | null;
   rankAdp: number | null;
   rankEcr: number | null;
   tier: number | null;
@@ -46,6 +47,7 @@ export function toAvailablePlayerVMs(rankings: RankingWithPlayer[]): AvailablePl
     position: r.players.position,
     nflTeam: r.players.nfl_team,
     byeWeek: r.players.bye_week,
+    draftYear: r.players.draft_year ?? null,
     rankAdp: r.rank_adp,
     rankEcr: r.rank_ecr,
     tier: r.tier,

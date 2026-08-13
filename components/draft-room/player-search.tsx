@@ -119,6 +119,7 @@ export function PlayerSearch({ draftId, availablePlayers, teams, defaultTeamId }
               <p className="text-xs text-slate-500">
                 {p.position} · {p.nflTeam ?? "FA"}
                 {p.byeWeek != null ? ` · Bye ${p.byeWeek}` : ""}
+                {p.draftYear != null ? ` · ${p.draftYear}` : ""}
                 {p.rankAdp != null ? ` · ADP ${p.rankAdp}` : ""}
               </p>
             </div>

@@ -9,6 +9,7 @@ import {
   type FpPlayer,
   type FpScoring,
 } from "@/lib/fantasypros/client";
+import { fetchDraftYearLookup, resolveDraftYear } from "@/lib/sleeper/rookie-years";
 
 export type SyncRankingsResult =
   | { ok: true; playerCount: number; syncedAt: string }
@@ -18,6 +19,7 @@ export type SyncRankingsResult =
  * Fetches ADP + ROS (ECR) consensus rankings and season projections from
  * FantasyPros for the given draft's season/scoring and upserts them into
  * `players` + `player_rankings` (including proj_points / proj_stats).
+ * Also enriches `players.draft_year` from Sleeper rookie_year metadata.
  */
 export async function syncRankingsForDraft(draftId: string): Promise<SyncRankingsResult> {
   const supabase = await createClient();
@@ -56,6 +58,16 @@ export async function syncRankingsForDraft(draftId: string): Promise<SyncRanking
     };
   }
 
+  let draftYears: Awaited<ReturnType<typeof fetchDraftYearLookup>> | null = null;
+  try {
+    draftYears = await fetchDraftYearLookup();
+  } catch (err) {
+    console.warn(
+      "Draft-year enrichment skipped:",
+      err instanceof Error ? err.message : err,
+    );
+  }
+
   const admin = createAdminClient();
 
   const playersById = new Map<string, FpPlayer>();
@@ -71,6 +83,8 @@ export async function syncRankingsForDraft(draftId: string): Promise<SyncRanking
       player_team_id: p.nflTeam,
       player_position_id: p.position,
       player_bye_week: null,
+      sportsdata_id: null,
+      player_yahoo_id: null,
       rank_ecr: Number.NaN,
       rank_min: null,
       rank_max: null,
@@ -83,13 +97,30 @@ export async function syncRankingsForDraft(draftId: string): Promise<SyncRanking
 
   const playerRows = Array.from(playersById.values()).map((p) => {
     const fromProj = projById.get(p.player_id);
-    return {
+    const name = p.player_name || fromProj?.name || p.player_id;
+    const row: {
+      fp_player_id: string;
+      name: string;
+      position: string;
+      nfl_team: string | null;
+      bye_week: number | null;
+      draft_year?: number | null;
+    } = {
       fp_player_id: p.player_id,
-      name: p.player_name || fromProj?.name || p.player_id,
+      name,
       position: normalizePosition(p.player_position_id || fromProj?.position || "UNK"),
       nfl_team: p.player_team_id ?? fromProj?.nflTeam ?? null,
       bye_week: p.player_bye_week != null ? Number(p.player_bye_week) : null,
     };
+    // Only touch draft_year when enrichment ran — avoid wiping prior values on Sleeper failure.
+    if (draftYears) {
+      row.draft_year = resolveDraftYear(draftYears, {
+        sportsdataId: p.sportsdata_id,
+        yahooId: p.player_yahoo_id != null ? String(p.player_yahoo_id) : null,
+        name,
+      });
+    }
+    return row;
   });
 
   if (playerRows.length > 0) {

@@ -83,8 +83,8 @@ service-role key (via the FantasyPros sync route).
   request (never stored server-side). Ollama requires a tool-calling model
   (e.g. `llama3.1`) and only works when `next dev` can reach your local
   Ollama daemon — not from Vercel to a home machine. Re-run rankings sync
-  after deploying the projections migration so `proj_points` / `proj_stats`
-  populate.
+  Re-run rankings sync after deploying the projections / draft-year migrations so
+  `proj_points` / `proj_stats` / `draft_year` populate.
 
 Run `npm test` to run the unit tests for all of the above.
 
