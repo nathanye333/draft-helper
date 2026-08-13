@@ -18,6 +18,36 @@ export interface DraftBundle {
   picks: PickWithDetails[];
 }
 
+/** PostgREST returns Postgres `numeric` as strings — coerce for math/sorting. */
+function toNum(value: unknown): number | null {
+  if (value == null || value === "") return null;
+  const n = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+function normalizeRanking(row: RankingWithPlayer): RankingWithPlayer {
+  return {
+    ...row,
+    rank_ecr: toNum(row.rank_ecr),
+    rank_adp: toNum(row.rank_adp),
+    rank_min: toNum(row.rank_min),
+    rank_max: toNum(row.rank_max),
+    rank_std: toNum(row.rank_std),
+    proj_points: toNum(row.proj_points),
+    proj_stats:
+      row.proj_stats && typeof row.proj_stats === "object"
+        ? (row.proj_stats as Record<string, number>)
+        : null,
+  };
+}
+
+function normalizePick(row: PickWithDetails): PickWithDetails {
+  return {
+    ...row,
+    adp_delta: toNum(row.adp_delta),
+  };
+}
+
 /**
  * Loads everything needed to render the draft room / board / analysis pages
  * in one place. RLS scopes every query to the current authenticated user, so
@@ -26,10 +56,14 @@ export interface DraftBundle {
 export async function fetchDraftBundle(draftId: string): Promise<DraftBundle | null> {
   const supabase = await createClient();
 
-  const { data: draft } = await supabase.from("drafts").select("*").eq("id", draftId).single();
-  if (!draft) return null;
+  const { data: draft, error: draftError } = await supabase
+    .from("drafts")
+    .select("*")
+    .eq("id", draftId)
+    .single();
+  if (draftError || !draft) return null;
 
-  const [{ data: teams }, { data: rosterSlots }, { data: rankings }, { data: picks }] = await Promise.all([
+  const [teamsRes, slotsRes, rankingsRes, picksRes] = await Promise.all([
     supabase.from("draft_teams").select("*").eq("draft_id", draftId).order("draft_position"),
     supabase.from("roster_slots").select("*").eq("draft_id", draftId).order("sort_order"),
     supabase
@@ -44,11 +78,24 @@ export async function fetchDraftBundle(draftId: string): Promise<DraftBundle | n
       .order("pick_number", { ascending: true }),
   ]);
 
+  const firstError = teamsRes.error ?? slotsRes.error ?? rankingsRes.error ?? picksRes.error;
+  if (firstError) {
+    throw new Error(`Failed to load draft data: ${firstError.message}`);
+  }
+
+  const rankings = ((rankingsRes.data ?? []) as unknown as RankingWithPlayer[])
+    .filter((r) => r.players != null)
+    .map(normalizeRanking);
+
+  const picks = ((picksRes.data ?? []) as unknown as PickWithDetails[])
+    .filter((p) => p.players != null && p.draft_teams != null)
+    .map(normalizePick);
+
   return {
     draft: draft as Draft,
-    teams: (teams ?? []) as DraftTeam[],
-    rosterSlots: (rosterSlots ?? []) as RosterSlot[],
-    rankings: (rankings ?? []) as unknown as RankingWithPlayer[],
-    picks: (picks ?? []) as unknown as PickWithDetails[],
+    teams: (teamsRes.data ?? []) as DraftTeam[],
+    rosterSlots: (slotsRes.data ?? []) as RosterSlot[],
+    rankings,
+    picks,
   };
 }

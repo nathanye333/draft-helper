@@ -125,8 +125,10 @@ export const DATASET_COLUMNS = [
 
 function numStat(stats: Record<string, number> | null | undefined, key: string): number | null {
   if (!stats) return null;
-  const v = stats[key];
-  return v != null && Number.isFinite(v) ? v : null;
+  const raw = stats[key];
+  if (raw == null) return null;
+  const v = typeof raw === "number" ? raw : Number(raw);
+  return Number.isFinite(v) ? v : null;
 }
 
 /** Flatten rankings + picks into analysis-friendly player rows for one draft. */
