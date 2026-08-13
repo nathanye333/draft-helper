@@ -59,6 +59,7 @@ export function createChatModel(config: LlmConfig): BaseChatModel {
     model,
     apiKey,
     temperature,
+    streaming: true,
     configuration: { baseURL },
   });
 }

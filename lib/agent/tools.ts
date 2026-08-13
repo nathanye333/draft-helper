@@ -317,7 +317,17 @@ export function createDraftTools(draftId: string) {
       const result = await webSearch(input.query, {
         maxResults: input.maxResults ?? 5,
       });
-      return json(result);
+      // Compact JSON — pretty tool payloads bloat the follow-up model turn.
+      return JSON.stringify({
+        query: result.query,
+        provider: result.provider,
+        note: result.note,
+        results: result.results.map((r) => ({
+          title: r.title,
+          url: r.url,
+          snippet: r.snippet.slice(0, 240),
+        })),
+      });
     },
     {
       name: "web_search",

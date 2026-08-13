@@ -8,7 +8,7 @@ import { resolveOpenAiApiKey } from "@/lib/agent/server-llm";
 import { fetchDraftBundle } from "@/lib/draft/data";
 import { createClient } from "@/lib/supabase/server";
 
-export const maxDuration = 60;
+export const maxDuration = 120;
 
 const chatBodySchema = z.object({
   messages: z
@@ -74,6 +74,14 @@ export async function POST(
 
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
+      const send = (event: DraftAgentStreamEvent) => {
+        try {
+          controller.enqueue(encodeEvent(event));
+        } catch {
+          // Client disconnected / controller already closed.
+        }
+      };
+
       try {
         for await (const event of streamDraftChatAgent({
           draftId,
@@ -81,14 +89,20 @@ export async function POST(
           llm: { provider, model, baseUrl, apiKey },
           signal: request.signal,
         })) {
-          controller.enqueue(encodeEvent(event));
+          if (request.signal.aborted) break;
+          send(event);
         }
       } catch (err) {
         const message = err instanceof Error ? err.message : "Agent failed";
-        controller.enqueue(encodeEvent({ type: "error", message }));
-        controller.enqueue(encodeEvent({ type: "done" }));
+        console.error("[draft-agent] route stream error:", message);
+        send({ type: "error", message });
+        send({ type: "done" });
       } finally {
-        controller.close();
+        try {
+          controller.close();
+        } catch {
+          // already closed
+        }
       }
     },
     cancel() {

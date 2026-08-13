@@ -115,7 +115,13 @@ function ToolCallRows({ tools }: { tools: ToolCallVM[] }) {
           </summary>
           <div className="space-y-2 border-t border-slate-800/80 px-2.5 py-2 text-[11px] text-slate-400">
             <pre className="max-h-28 overflow-auto whitespace-pre-wrap break-all rounded bg-slate-950/60 p-2">
-              {JSON.stringify(t.input, null, 2)}
+              {(() => {
+                try {
+                  return JSON.stringify(t.input, null, 2) ?? "null";
+                } catch {
+                  return String(t.input);
+                }
+              })()}
             </pre>
             {t.output ? (
               <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-all rounded bg-slate-950/60 p-2 text-slate-300">
@@ -413,7 +419,12 @@ export function ChatPanel({ draftId }: { draftId: string }) {
               ),
             }));
           } else if (event.type === "error") {
-            setError(event.message);
+            const message = event.message || "Agent failed";
+            setError(message);
+            patchAssistant(assistantId, (m) => ({
+              ...m,
+              content: m.content.trim() || message,
+            }));
           } else if (event.type === "done") {
             const stopped = Boolean(event.stopped);
             patchAssistant(assistantId, (m) => ({
@@ -425,6 +436,38 @@ export function ChatPanel({ draftId }: { draftId: string }) {
                 (stopped ? "Stopped." : m.reasoning ? "" : "No response from the model."),
             }));
           }
+        }
+      }
+
+      // Flush a final NDJSON line if the stream ended without a trailing newline.
+      const trailing = buffer.trim();
+      if (trailing) {
+        try {
+          const event = JSON.parse(trailing) as DraftAgentStreamEvent;
+          if (event.type === "error") {
+            setError(event.message || "Agent failed");
+            patchAssistant(assistantId, (m) => ({
+              ...m,
+              streaming: false,
+              content: m.content.trim() || event.message || "Agent failed",
+            }));
+          } else if (event.type === "done") {
+            patchAssistant(assistantId, (m) => ({
+              ...m,
+              streaming: false,
+              stopped: Boolean(event.stopped),
+              content:
+                m.content.trim() ||
+                (event.stopped ? "Stopped." : "No response from the model."),
+            }));
+          } else if (event.type === "token") {
+            patchAssistant(assistantId, (m) => ({
+              ...m,
+              content: `${m.content}${event.delta}`,
+            }));
+          }
+        } catch {
+          // ignore partial trailing junk
         }
       }
 
@@ -449,11 +492,12 @@ export function ChatPanel({ draftId }: { draftId: string }) {
           content: m.content.trim() || "Stopped.",
         }));
       } else {
-        setError(err instanceof Error ? err.message : "Chat failed");
+        const message = err instanceof Error ? err.message : "Chat failed";
+        setError(message);
         patchAssistant(assistantId, (m) => ({
           ...m,
           streaming: false,
-          content: m.content.trim() || "Something went wrong.",
+          content: m.content.trim() || message,
         }));
       }
     } finally {

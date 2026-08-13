@@ -62,7 +62,16 @@ function extractText(content: unknown): string {
       .filter(Boolean)
       .join("\n");
   }
+  if (content && typeof content === "object" && "content" in content) {
+    return extractText((content as { content: unknown }).content);
+  }
   return content == null ? "" : String(content);
+}
+
+function toolOutputToString(output: unknown, error?: string): string {
+  if (error) return error;
+  if (output === undefined) return "";
+  return extractText(output).slice(0, 4000);
 }
 
 function collectToolCalls(messages: BaseMessage[]): ToolCallTrace[] {
@@ -210,24 +219,31 @@ export async function* streamDraftChatAgent(params: {
 
     const messagePump = (async () => {
       for await (const msg of run.messages) {
-        await Promise.all([
-          (async () => {
-            try {
-              for await (const delta of msg.reasoning) {
-                if (params.signal?.aborted) return;
-                if (delta) queue.push({ type: "reasoning", delta });
-              }
-            } catch {
-              // Some models have no reasoning channel.
-            }
-          })(),
-          (async () => {
-            for await (const delta of msg.text) {
+        if (params.signal?.aborted) return;
+
+        const reasoningTask = (async () => {
+          try {
+            for await (const delta of msg.reasoning) {
               if (params.signal?.aborted) return;
-              if (delta) queue.push({ type: "token", delta });
+              if (delta) queue.push({ type: "reasoning", delta });
             }
-          })(),
-        ]);
+          } catch {
+            // Some models have no reasoning channel.
+          }
+        })();
+
+        try {
+          for await (const delta of msg.text) {
+            if (params.signal?.aborted) return;
+            if (delta) queue.push({ type: "token", delta });
+          }
+        } catch (err) {
+          if (!params.signal?.aborted) {
+            throw err instanceof Error ? err : new Error(String(err));
+          }
+        }
+
+        await reasoningTask;
       }
     })();
 
@@ -248,8 +264,7 @@ export async function* streamDraftChatAgent(params: {
             call.error.catch(() => undefined),
           ]);
           const text =
-            error ||
-            (output !== undefined ? extractText(output).slice(0, 4000) : "") ||
+            toolOutputToString(output, error) ||
             (status === "error" ? "Tool failed" : "");
           queue.push({
             type: "tool_end",
@@ -268,7 +283,13 @@ export async function* streamDraftChatAgent(params: {
       }
     })();
 
-    await Promise.all([messagePump, toolPump]);
+    // Await final state too — otherwise some post-tool model failures only
+    // reject run.output and can leave the NDJSON stream hanging until timeout.
+    const settled = await Promise.allSettled([messagePump, toolPump, run.output]);
+    const firstReject = settled.find((r) => r.status === "rejected");
+    if (firstReject && firstReject.status === "rejected") {
+      throw firstReject.reason;
+    }
   })();
 
   const finished = runPromise
@@ -283,6 +304,7 @@ export async function* streamDraftChatAgent(params: {
         return;
       }
       const message = err instanceof Error ? err.message : "Agent failed";
+      console.error("[draft-agent] stream failed:", message);
       queue.push({ type: "error", message });
       queue.push({ type: "done" });
       queue.close();
