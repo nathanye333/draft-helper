@@ -8,6 +8,7 @@ import {
   saveLlmSettings,
   type StoredLlmSettings,
 } from "@/lib/agent/llm-settings";
+import { fallbackModels } from "@/lib/agent/list-models";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -49,11 +50,115 @@ export function ChatPanel({ draftId }: { draftId: string }) {
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [modelOptions, setModelOptions] = useState<string[]>(() =>
+    fallbackModels(settings.provider),
+  );
+  const [modelsLoading, setModelsLoading] = useState(false);
+  const [modelsError, setModelsError] = useState<string | null>(null);
+  const [modelsSource, setModelsSource] = useState<"live" | "fallback">("fallback");
   const bottomRef = useRef<HTMLDivElement>(null);
+  const scanSeq = useRef(0);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, busy]);
+
+  async function scanModels(opts?: { silent?: boolean }) {
+    const seq = ++scanSeq.current;
+    if (!opts?.silent) {
+      setModelsLoading(true);
+      setModelsError(null);
+    }
+
+    try {
+      // Prefer browser → Ollama when provider is local (preview server can't see your laptop).
+      if (settings.provider === "ollama") {
+        const base = (settings.baseUrl.trim() || "http://127.0.0.1:11434").replace(/\/$/, "");
+        const res = await fetch(`${base}/api/tags`);
+        if (!res.ok) {
+          throw new Error(`Ollama returned ${res.status}. Is it running at ${base}?`);
+        }
+        const data = (await res.json()) as { models?: Array<{ name?: string; model?: string }> };
+        const models = [
+          ...new Set(
+            (data.models ?? [])
+              .map((m) => (m.name ?? m.model ?? "").trim())
+              .filter(Boolean)
+              .sort((a, b) => a.localeCompare(b)),
+          ),
+        ];
+        if (seq !== scanSeq.current) return;
+        if (models.length === 0) {
+          setModelOptions(fallbackModels("ollama"));
+          setModelsSource("fallback");
+          setModelsError("No models found. Run: ollama pull llama3.1");
+          return;
+        }
+        setModelOptions(models);
+        setModelsSource("live");
+        setModelsError(null);
+        if (!models.includes(settings.model)) {
+          persistSettings({ ...settings, model: models[0]! });
+        }
+        return;
+      }
+
+      const res = await fetch("/api/llm/models", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          provider: settings.provider,
+          baseUrl: settings.baseUrl || undefined,
+          apiKey: settings.apiKey || undefined,
+        }),
+      });
+      const data = (await res.json()) as {
+        ok: boolean;
+        models?: string[];
+        message?: string;
+      };
+      if (seq !== scanSeq.current) return;
+      if (!res.ok || !data.ok || !data.models) {
+        throw new Error(data.message ?? `Model scan failed (${res.status})`);
+      }
+      if (data.models.length === 0) {
+        setModelOptions(fallbackModels("openai"));
+        setModelsSource("fallback");
+        setModelsError("No chat models returned — showing common defaults.");
+        return;
+      }
+      setModelOptions(data.models);
+      setModelsSource("live");
+      setModelsError(null);
+      if (!data.models.includes(settings.model)) {
+        persistSettings({ ...settings, model: data.models[0]! });
+      }
+    } catch (err) {
+      if (seq !== scanSeq.current) return;
+      setModelOptions(fallbackModels(settings.provider));
+      setModelsSource("fallback");
+      setModelsError(err instanceof Error ? err.message : "Could not scan models");
+    } finally {
+      if (seq === scanSeq.current) setModelsLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!settingsOpen) return;
+    const t = window.setTimeout(() => {
+      void scanModels({ silent: false });
+    }, 250);
+    return () => window.clearTimeout(t);
+    // Re-scan when provider / endpoint / key change while settings are open.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional scan triggers
+  }, [settingsOpen, settings.provider, settings.baseUrl, settings.apiKey]);
+
+  const selectModels = useMemo(() => {
+    if (settings.model && !modelOptions.includes(settings.model)) {
+      return [settings.model, ...modelOptions];
+    }
+    return modelOptions;
+  }, [modelOptions, settings.model]);
 
   const canSend = useMemo(() => {
     if (!input.trim() || busy) return false;
@@ -74,6 +179,9 @@ export function ChatPanel({ draftId }: { draftId: string }) {
       model: defaults.model,
       baseUrl: defaults.baseUrl,
     });
+    setModelOptions(fallbackModels(provider));
+    setModelsSource("fallback");
+    setModelsError(null);
   }
 
   async function send() {
@@ -148,15 +256,40 @@ export function ChatPanel({ draftId }: { draftId: string }) {
               <option value="ollama">Ollama (local)</option>
             </Select>
           </div>
+
           <div className="space-y-1.5">
-            <Label htmlFor="llm-model">Model</Label>
-            <Input
+            <div className="flex items-center justify-between gap-2">
+              <Label htmlFor="llm-model">Model</Label>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                disabled={modelsLoading || (settings.provider === "openai" && !settings.apiKey.trim())}
+                onClick={() => void scanModels()}
+              >
+                {modelsLoading ? "Scanning…" : "Refresh"}
+              </Button>
+            </div>
+            <Select
               id="llm-model"
               value={settings.model}
               onChange={(e) => updateSettings({ model: e.target.value })}
-              placeholder={settings.provider === "ollama" ? "llama3.1" : "gpt-4o-mini"}
-            />
+              disabled={selectModels.length === 0}
+            >
+              {selectModels.map((id) => (
+                <option key={id} value={id}>
+                  {id}
+                </option>
+              ))}
+            </Select>
+            <p className="text-xs text-slate-500">
+              {modelsSource === "live"
+                ? `Showing ${selectModels.length} model${selectModels.length === 1 ? "" : "s"} from ${settings.provider === "ollama" ? "Ollama" : "your API"}.`
+                : "Using fallback list until a live scan succeeds."}
+              {modelsError ? ` ${modelsError}` : ""}
+            </p>
           </div>
+
           <div className="space-y-1.5">
             <Label htmlFor="llm-base">Base URL</Label>
             <Input
@@ -170,6 +303,7 @@ export function ChatPanel({ draftId }: { draftId: string }) {
               }
             />
           </div>
+
           <div className="space-y-1.5">
             <Label htmlFor="llm-key">
               API key {settings.provider === "ollama" ? "(optional)" : ""}
@@ -183,11 +317,48 @@ export function ChatPanel({ draftId }: { draftId: string }) {
               placeholder={settings.provider === "ollama" ? "Usually blank" : "sk-…"}
             />
           </div>
-          <p className="text-xs text-slate-500">
-            Ollama only works when this Next.js server can reach your machine (local{" "}
-            <code className="text-slate-400">next dev</code>). Use a tool-calling model such as
-            llama3.1.
-          </p>
+
+          {settings.provider === "ollama" ? (
+            <div className="space-y-1.5 rounded-md border border-slate-800 bg-slate-900/60 p-3 text-xs text-slate-400">
+              <p className="font-medium text-slate-300">Connect Ollama</p>
+              <ol className="list-decimal space-y-1 pl-4">
+                <li>
+                  Install from{" "}
+                  <a
+                    className="text-emerald-400 hover:underline"
+                    href="https://ollama.com"
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    ollama.com
+                  </a>
+                  , then start it (tray icon / <code className="text-slate-300">ollama serve</code>).
+                </li>
+                <li>
+                  Pull a tool-capable model:{" "}
+                  <code className="text-slate-300">ollama pull llama3.1</code>
+                </li>
+                <li>
+                  Leave Base URL as <code className="text-slate-300">http://127.0.0.1:11434</code> and
+                  hit Refresh — the dropdown should fill from your machine.
+                </li>
+                <li>
+                  Run the app with <code className="text-slate-300">npm run dev</code> locally.
+                  Vercel preview/production cannot reach your laptop&apos;s Ollama (chat runs on the
+                  server).
+                </li>
+              </ol>
+              <p>
+                If the browser scan is blocked by CORS, set{" "}
+                <code className="text-slate-300">OLLAMA_ORIGINS=*</code> and restart Ollama.
+              </p>
+            </div>
+          ) : (
+            <p className="text-xs text-slate-500">
+              Works with OpenAI, OpenRouter, Groq, etc. Paste an API key, set Base URL if needed, then
+              Refresh to load models.
+            </p>
+          )}
         </div>
       ) : null}
 
