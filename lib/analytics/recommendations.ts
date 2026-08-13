@@ -4,6 +4,10 @@ import type { Position, RosterSlot, SlotType } from "@/lib/supabase/types";
 
 const FLEX_ELIGIBLE: Position[] = ["RB", "WR", "TE"];
 const TOP_TIER_SIZE = 12;
+/** How many rounds ahead of the current pick we still consider "on the board". */
+const BOARD_WINDOW_ROUNDS = 3;
+/** Cap on fallen-ADP bonus so steals help but don't drown out rank quality. */
+const MAX_VALUE_BONUS = 25;
 
 export interface RecommendationCandidate {
   fpPlayerId: string;
@@ -76,16 +80,24 @@ function totalStarterSlots(
   return rosterSlots.filter((s) => s.slot_type !== "BENCH").reduce((sum, s) => sum + s.count, 0);
 }
 
+/** Best available rank signal (prefer ADP, fall back to ECR). */
+function boardRank(c: RecommendationCandidate): number | null {
+  if (c.rankAdp != null && Number.isFinite(c.rankAdp)) return c.rankAdp;
+  if (c.rankEcr != null && Number.isFinite(c.rankEcr)) return c.rankEcr;
+  return null;
+}
+
 /**
- * Scores each available candidate for the user's team at the current pick,
- * per the plan's weighted formula:
+ * Scores available candidates for the user's team at the current pick.
  *
- *   score = value_bonus * 0.5 + position_need * 0.3 + scarcity * 0.2
- *   value_bonus   = current_pick_number - rank_adp   (positive = available past ADP)
+ *   score = quality + value_bonus * 0.5 + position_need * 8 + scarcity * 4
+ *   quality       = -board_rank          (ADP/ECR; lower rank = better)
+ *   value_bonus   = clamp(pick - ADP, 0..25)  (only rewards players who have fallen)
  *   position_need = empty_starter_slots[pos] / total_starter_slots
  *   scarcity      = top_N_remaining_at_position / picks_until_next_user_pick
  *
- * Returns the top `limit` candidates (default 10) sorted by score descending.
+ * Candidates without ADP/ECR, or with ADP far beyond the current board window,
+ * are excluded so projection-only deep sleepers cannot outrank real draft targets.
  */
 export function computeRecommendations({
   candidates,
@@ -98,29 +110,43 @@ export function computeRecommendations({
 }: ComputeRecommendationsParams): Recommendation[] {
   const totalStarters = totalStarterSlots(rosterSlots);
   const untilNextTurn = picksUntilNextTurn(currentPickNumber, numTeams, userDraftPosition);
+  const boardCeiling = currentPickNumber + numTeams * BOARD_WINDOW_ROUNDS;
 
   const remainingCountByPosition = new Map<Position, number>();
   for (const c of candidates) {
-    if (c.rankEcr == null || c.rankEcr > TOP_TIER_SIZE) continue;
+    const rank = boardRank(c);
+    if (rank == null || rank > TOP_TIER_SIZE) continue;
     remainingCountByPosition.set(c.position, (remainingCountByPosition.get(c.position) ?? 0) + 1);
   }
 
-  const scored = candidates.map((c) => {
-    const valueBonus = computeAdpDelta(currentPickNumber, c.rankAdp) ?? 0;
+  const scored = candidates.flatMap((c) => {
+    const rank = boardRank(c);
+    if (rank == null) return [];
+    // Keep recommendations near the live board — not UDFA/projection filler.
+    if (rank > boardCeiling) return [];
+
+    const rawDelta = computeAdpDelta(currentPickNumber, c.rankAdp);
+    const valueBonus =
+      rawDelta != null && rawDelta > 0 ? Math.min(MAX_VALUE_BONUS, rawDelta) : 0;
+
     const emptySlots = emptyStarterSlotsForPosition(c.position, rosterSlots, userAssignedSlots);
     const positionNeed = totalStarters > 0 ? emptySlots / totalStarters : 0;
     const topRemaining = remainingCountByPosition.get(c.position) ?? 0;
     const scarcity = topRemaining / untilNextTurn;
 
-    const score = valueBonus * 0.5 + positionNeed * 0.3 + scarcity * 0.2;
+    // Quality dominates: ADP 1 ≈ -1, ADP 30 ≈ -30. Need/scarcity are tie-breakers.
+    const quality = -rank;
+    const score = quality + valueBonus * 0.5 + positionNeed * 8 + scarcity * 4;
 
-    return {
-      fpPlayerId: c.fpPlayerId,
-      name: c.name,
-      position: c.position,
-      score,
-      rationale: buildRationale(c, valueBonus, emptySlots, topRemaining),
-    };
+    return [
+      {
+        fpPlayerId: c.fpPlayerId,
+        name: c.name,
+        position: c.position,
+        score,
+        rationale: buildRationale(c, rank, valueBonus, emptySlots, topRemaining),
+      },
+    ];
   });
 
   return scored.sort((a, b) => b.score - a.score).slice(0, limit);
@@ -128,6 +154,7 @@ export function computeRecommendations({
 
 function buildRationale(
   candidate: RecommendationCandidate,
+  rank: number,
   valueBonus: number,
   emptySlots: number,
   topRemaining: number,
@@ -137,8 +164,12 @@ function buildRationale(
   if (emptySlots > 0) parts.push(`${candidate.position} need`);
 
   if (candidate.rankAdp != null) {
-    if (valueBonus > 0) parts.push(`+${Math.round(valueBonus)} ADP value`);
-    else if (valueBonus < 0) parts.push(`${Math.round(Math.abs(valueBonus))} ahead of ADP`);
+    parts.push(`ADP ${Math.round(candidate.rankAdp)}`);
+    if (valueBonus > 0) parts.push(`+${Math.round(valueBonus)} value`);
+  } else if (candidate.rankEcr != null) {
+    parts.push(`ECR ${Math.round(candidate.rankEcr)}`);
+  } else {
+    parts.push(`rank ${Math.round(rank)}`);
   }
 
   if (topRemaining > 0) {
