@@ -8,7 +8,7 @@ import { PickFeed } from "@/components/draft-room/pick-feed";
 import { MyRoster } from "@/components/draft-room/my-roster";
 import { RecommendationsPanel } from "@/components/draft-room/recommendations-panel";
 import { toRecommendationVMs } from "@/lib/draft/recommendation-vm";
-import { ChatPanel } from "@/components/draft-room/chat-panel";
+import { DraftAgentSection } from "@/components/draft-room/draft-agent-section";
 import { UndoButton } from "@/components/draft-room/undo-button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
@@ -121,7 +121,7 @@ export default async function DraftRoomPage({ params }: PageProps<"/drafts/[id]"
           <CardTitle>Draft agent</CardTitle>
         </CardHeader>
         <CardContent>
-          <ChatPanel draftId={id} />
+          <DraftAgentSection draftId={id} />
         </CardContent>
       </Card>
     </div>

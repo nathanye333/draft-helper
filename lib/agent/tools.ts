@@ -30,7 +30,7 @@ async function loadContext(draftId: string): Promise<{
   bundle: DraftBundle;
   rows: PlayerRow[];
 }> {
-  const bundle = await fetchDraftBundle(draftId);
+  const bundle = await fetchDraftBundle(draftId, { includeProjStats: true });
   if (!bundle) {
     throw new Error("Draft not found or you do not have access.");
   }

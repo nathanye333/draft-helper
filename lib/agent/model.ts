@@ -1,15 +1,9 @@
 import { ChatOllama } from "@langchain/ollama";
 import { ChatOpenAI } from "@langchain/openai";
 import type { BaseChatModel } from "@langchain/core/language_models/chat_models";
+import type { LlmConfig } from "@/lib/agent/types";
 
-export type LlmProvider = "openai" | "ollama";
-
-export interface LlmConfig {
-  provider: LlmProvider;
-  model: string;
-  baseUrl?: string;
-  apiKey?: string;
-}
+export type { LlmConfig, LlmProvider } from "@/lib/agent/types";
 
 const DEFAULT_OPENAI_BASE = "https://api.openai.com/v1";
 const DEFAULT_OLLAMA_BASE = "http://127.0.0.1:11434";

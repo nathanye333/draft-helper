@@ -112,6 +112,17 @@ export async function completeDraft(draftId: string) {
   revalidatePath(`/drafts/${draftId}`);
 }
 
+export async function deleteDraft(draftId: string) {
+  const supabase = await createClient();
+  const { data: userData } = await supabase.auth.getUser();
+  if (!userData.user) throw new Error("Not authenticated");
+
+  const { error } = await supabase.from("drafts").delete().eq("id", draftId);
+  if (error) throw new Error(error.message);
+
+  revalidatePath("/");
+}
+
 const logPickSchema = z.object({
   draftId: z.string().uuid(),
   fpPlayerId: z.string().min(1),

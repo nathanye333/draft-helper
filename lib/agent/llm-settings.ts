@@ -1,4 +1,4 @@
-import type { LlmProvider } from "@/lib/agent/model";
+import type { LlmProvider } from "@/lib/agent/types";
 
 const STORAGE_KEY = "draft-helper.llm-settings";
 

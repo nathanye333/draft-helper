@@ -10,8 +10,6 @@ import {
 } from "@/components/draft-room/player-board-filters";
 import type { RecommendationVM } from "@/lib/draft/recommendation-vm";
 
-export type { RecommendationVM } from "@/lib/draft/recommendation-vm";
-
 export function RecommendationsPanel({ recommendations }: { recommendations: RecommendationVM[] }) {
   const [filters, setFilters] = useState<BoardFilterState>(DEFAULT_BOARD_FILTERS);
   const { byeWeeks, nflTeams } = useBoardFilterOptions(recommendations);

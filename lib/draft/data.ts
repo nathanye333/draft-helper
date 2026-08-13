@@ -52,8 +52,14 @@ function normalizePick(row: PickWithDetails): PickWithDetails {
  * Loads everything needed to render the draft room / board / analysis pages
  * in one place. RLS scopes every query to the current authenticated user, so
  * this returns `null` if the draft doesn't exist or isn't owned by them.
+ *
+ * Pass `includeProjStats` for agent tools that need the full FantasyPros
+ * stats blob; UI pages omit it to keep payloads small.
  */
-export async function fetchDraftBundle(draftId: string): Promise<DraftBundle | null> {
+export async function fetchDraftBundle(
+  draftId: string,
+  options: { includeProjStats?: boolean } = {},
+): Promise<DraftBundle | null> {
   const supabase = await createClient();
 
   const { data: draft, error: draftError } = await supabase
@@ -63,14 +69,18 @@ export async function fetchDraftBundle(draftId: string): Promise<DraftBundle | n
     .single();
   if (draftError || !draft) return null;
 
+  const rankingSelect = options.includeProjStats
+    ? "id, draft_id, fp_player_id, rank_ecr, rank_adp, rank_min, rank_max, rank_std, tier, proj_points, proj_stats, synced_at, players(*)"
+    : "id, draft_id, fp_player_id, rank_ecr, rank_adp, rank_min, rank_max, rank_std, tier, proj_points, synced_at, players(*)";
+
   const [teamsRes, slotsRes, rankingsRes, picksRes] = await Promise.all([
     supabase.from("draft_teams").select("*").eq("draft_id", draftId).order("draft_position"),
     supabase.from("roster_slots").select("*").eq("draft_id", draftId).order("sort_order"),
     supabase
       .from("player_rankings")
-      .select("*, players(*)")
+      .select(rankingSelect)
       .eq("draft_id", draftId)
-      .order("rank_adp", { ascending: true, nullsFirst: false }),
+      .order("rank_adp", { ascending: true }),
     supabase
       .from("draft_picks")
       .select("*, players(*), draft_teams(*)")

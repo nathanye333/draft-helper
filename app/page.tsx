@@ -4,6 +4,7 @@ import { createClient } from "@/lib/supabase/server";
 import { buttonVariants } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { DeleteDraftButton } from "@/components/draft-list/delete-draft-button";
 import type { Draft } from "@/lib/supabase/types";
 
 const STATUS_VARIANT: Record<Draft["status"], "default" | "success" | "warning"> = {
@@ -49,19 +50,20 @@ export default async function DashboardPage() {
       ) : (
         <div className="flex flex-col gap-3">
           {(drafts as Draft[]).map((draft) => (
-            <Link key={draft.id} href={STATUS_HREF[draft.status](draft.id)}>
-              <Card className="transition-colors hover:border-slate-700">
-                <CardHeader className="flex-row items-center justify-between">
-                  <div>
-                    <CardTitle>{draft.name}</CardTitle>
-                    <p className="text-sm text-slate-400">
-                      {draft.season} · {draft.num_teams} teams · {draft.scoring}
-                    </p>
-                  </div>
+            <Card key={draft.id} className="transition-colors hover:border-slate-700">
+              <CardHeader className="flex-row items-center justify-between gap-3">
+                <Link href={STATUS_HREF[draft.status](draft.id)} className="min-w-0 flex-1">
+                  <CardTitle>{draft.name}</CardTitle>
+                  <p className="text-sm text-slate-400">
+                    {draft.season} · {draft.num_teams} teams · {draft.scoring}
+                  </p>
+                </Link>
+                <div className="flex shrink-0 items-center gap-2">
                   <Badge variant={STATUS_VARIANT[draft.status]}>{draft.status}</Badge>
-                </CardHeader>
-              </Card>
-            </Link>
+                  <DeleteDraftButton draftId={draft.id} draftName={draft.name} />
+                </div>
+              </CardHeader>
+            </Card>
           ))}
         </div>
       )}
