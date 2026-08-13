@@ -31,14 +31,6 @@ export async function syncRankingsForDraft(draftId: string): Promise<SyncRanking
     return { ok: false, reason: "not_found", message: "Draft not found or not accessible." };
   }
 
-  if (!process.env.FANTASYPROS_API_KEY) {
-    return {
-      ok: false,
-      reason: "not_configured",
-      message: "FANTASYPROS_API_KEY is not set. Add it to run rankings sync.",
-    };
-  }
-
   const scoring = draft.scoring as FpScoring;
 
   let adpPlayers: FpPlayer[];
@@ -47,12 +39,21 @@ export async function syncRankingsForDraft(draftId: string): Promise<SyncRanking
   try {
     [adpPlayers, rosPlayers, projections] = await Promise.all([
       fetchConsensusRankings({ season: draft.season, scoring, type: "ADP" }),
-      fetchConsensusRankings({ season: draft.season, scoring, type: "ROS" }),
+      // DRAFT = preseason ECR (full board); ROS can be thinner early in the offseason.
+      fetchConsensusRankings({ season: draft.season, scoring, type: "DRAFT" }),
       fetchProjections({ season: draft.season, scoring, week: 0 }),
     ]);
   } catch (err) {
     const message = err instanceof FantasyProsApiError ? err.message : "Unknown FantasyPros error";
     return { ok: false, reason: "api_error", message };
+  }
+
+  if (adpPlayers.length < 50) {
+    return {
+      ok: false,
+      reason: "api_error",
+      message: `FantasyPros returned only ${adpPlayers.length} ADP players — refusing to overwrite rankings with a truncated board.`,
+    };
   }
 
   const admin = createAdminClient();
@@ -125,6 +126,26 @@ export async function syncRankingsForDraft(draftId: string): Promise<SyncRanking
       .from("player_rankings")
       .upsert(rankingRows, { onConflict: "draft_id,fp_player_id" });
     if (error) return { ok: false, reason: "api_error", message: `Failed to save rankings: ${error.message}` };
+
+    // Drop stale rows left over from a prior truncated sync.
+    const keepIds = new Set(rankingRows.map((r) => r.fp_player_id));
+    const { data: existing } = await admin
+      .from("player_rankings")
+      .select("fp_player_id")
+      .eq("draft_id", draftId);
+    const staleIds = (existing ?? [])
+      .map((r) => r.fp_player_id as string)
+      .filter((id) => !keepIds.has(id));
+    if (staleIds.length > 0) {
+      const { error: cleanupError } = await admin
+        .from("player_rankings")
+        .delete()
+        .eq("draft_id", draftId)
+        .in("fp_player_id", staleIds);
+      if (cleanupError) {
+        console.warn("Failed to prune stale rankings:", cleanupError.message);
+      }
+    }
   }
 
   return { ok: true, playerCount: rankingRows.length, syncedAt };

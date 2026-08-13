@@ -1,6 +1,7 @@
 import { z } from "zod";
 
-const FP_BASE_URL = "https://api.fantasypros.com/public/v2/json/nfl";
+/** Unofficial partner feed — returns full consensus boards (not the 10-player public API cap). */
+const FP_PARTNERS_BASE = "https://partners.fantasypros.com/api/v1";
 
 const fpPlayerSchema = z.object({
   player_id: z.union([z.number(), z.string()]).transform(String),
@@ -50,7 +51,9 @@ export type FpProjectionPlayer = {
 };
 
 export type FpScoring = "STD" | "PPR" | "HALF";
-export type FpRankingType = "ADP" | "ROS" | "DK" | "WW";
+export type FpRankingType = "ADP" | "ROS" | "DRAFT";
+
+const PROJECTION_POSITIONS = ["QB", "RB", "WR", "TE", "K", "DST"] as const;
 
 interface FetchConsensusRankingsParams {
   season: number;
@@ -73,22 +76,13 @@ export class FantasyProsApiError extends Error {
   }
 }
 
-async function fpFetch(path: string, params: Record<string, string>): Promise<unknown> {
-  const apiKey = process.env.FANTASYPROS_API_KEY;
-  if (!apiKey) {
-    throw new FantasyProsApiError("FANTASYPROS_API_KEY is not configured");
-  }
-
-  const url = new URL(`${FP_BASE_URL}${path}`);
+async function partnersFetch(path: string, params: Record<string, string>): Promise<unknown> {
+  const url = new URL(`${FP_PARTNERS_BASE}${path}`);
   for (const [key, value] of Object.entries(params)) {
     url.searchParams.set(key, value);
   }
 
-  const response = await fetch(url, {
-    headers: { "x-api-key": apiKey },
-    cache: "no-store",
-  });
-
+  const response = await fetch(url, { cache: "no-store" });
   if (!response.ok) {
     throw new FantasyProsApiError(
       `FantasyPros request failed: ${response.status} ${response.statusText}`,
@@ -100,8 +94,8 @@ async function fpFetch(path: string, params: Record<string, string>): Promise<un
 }
 
 /**
- * Calls FantasyPros' consensus-rankings endpoint. Requires FANTASYPROS_API_KEY
- * to be set server-side; never call this from client code.
+ * Consensus rankings / ADP from FantasyPros partner feed (full board).
+ * Server-only — do not call from the browser.
  */
 export async function fetchConsensusRankings({
   season,
@@ -109,11 +103,12 @@ export async function fetchConsensusRankings({
   type,
   position = "ALL",
 }: FetchConsensusRankingsParams): Promise<FpPlayer[]> {
-  const json = await fpFetch(`/${season}/consensus-rankings`, {
+  const json = await partnersFetch("/consensus-rankings.php", {
+    sport: "NFL",
+    year: String(season),
     position,
     scoring,
     type,
-    week: "0",
   });
 
   const parsed = fpResponseSchema.safeParse(json);
@@ -127,40 +122,45 @@ export async function fetchConsensusRankings({
 }
 
 /**
- * Season projections (week=0). Stats include points / points_ppr / points_half
- * plus position-specific volume (pass/rush/rec/etc.).
+ * Season projections (week=0), fetched per position and merged.
  */
 export async function fetchProjections({
   season,
   scoring,
   week = 0,
 }: FetchProjectionsParams): Promise<FpProjectionPlayer[]> {
-  const json = await fpFetch(`/${season}/projections`, {
-    week: String(week),
-    scoring,
-    positions: "QB:RB:WR:TE:K:DST",
-  });
+  const chunks = await Promise.all(
+    PROJECTION_POSITIONS.map(async (position) => {
+      const json = await partnersFetch("/nfl-projections.php", {
+        year: String(season),
+        week: String(week),
+        position,
+        scoring,
+      });
+      const parsed = fpProjectionsResponseSchema.safeParse(json);
+      if (!parsed.success) {
+        throw new FantasyProsApiError(
+          `Unexpected FantasyPros projections response shape (${position}): ${parsed.error.message}`,
+        );
+      }
+      return parsed.data.players;
+    }),
+  );
 
-  const parsed = fpProjectionsResponseSchema.safeParse(json);
-  if (!parsed.success) {
-    throw new FantasyProsApiError(
-      `Unexpected FantasyPros projections response shape: ${parsed.error.message}`,
-    );
+  const byId = new Map<string, FpProjectionPlayer>();
+  for (const p of chunks.flat()) {
+    const playerId = p.fpid ?? p.player_id;
+    if (!playerId || byId.has(playerId)) continue;
+    byId.set(playerId, {
+      playerId,
+      name: p.name ?? p.player_name ?? playerId,
+      position: p.position_id ?? p.player_position_id ?? "UNK",
+      nflTeam: p.team_id ?? p.player_team_id ?? null,
+      stats: p.stats ?? {},
+    });
   }
 
-  return parsed.data.players
-    .map((p) => {
-      const playerId = p.fpid ?? p.player_id;
-      if (!playerId) return null;
-      return {
-        playerId,
-        name: p.name ?? p.player_name ?? playerId,
-        position: p.position_id ?? p.player_position_id ?? "UNK",
-        nflTeam: p.team_id ?? p.player_team_id ?? null,
-        stats: p.stats ?? {},
-      };
-    })
-    .filter((p): p is FpProjectionPlayer => p != null);
+  return Array.from(byId.values());
 }
 
 /** Pick the FantasyPros points field matching the draft's scoring format. */

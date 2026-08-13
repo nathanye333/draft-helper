@@ -122,10 +122,9 @@ cp .env.local.example .env.local
 ```
 
 Fill in `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, and
-`SUPABASE_SERVICE_ROLE_KEY` from `npx supabase status`. Add your
-`FANTASYPROS_API_KEY` (see [fantasypros.com/api-data](https://www.fantasypros.com/api-data/)
-to request one) — without it, rankings sync is skipped gracefully and the app
-still works for manual pick logging (value badges just show "No Data").
+`SUPABASE_SERVICE_ROLE_KEY` from `npx supabase status`. Rankings sync pulls
+FantasyPros consensus ADP/ECR + projections from their partner feed (no API
+key required).
 
 ### 4. Run the app
 
@@ -157,7 +156,7 @@ npm run lint
 3. **Create a Vercel project** from this repo and set the same environment
    variables from `.env.local.example` in Vercel's Project Settings →
    Environment Variables, using your Supabase Cloud project's URL/keys
-   (Settings → API in the Supabase dashboard) and your FantasyPros API key.
+   (Settings → API in the Supabase dashboard).
 4. **Enable email auth** in Supabase Auth settings (magic link is enabled by
    default) and add your production domain to the redirect URL allow-list
    (Authentication → URL Configuration).

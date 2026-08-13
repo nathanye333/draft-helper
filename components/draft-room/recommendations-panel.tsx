@@ -8,9 +8,20 @@ import {
   useBoardFilterOptions,
   type BoardFilterState,
 } from "@/components/draft-room/player-board-filters";
-import type { RecommendationVM } from "@/lib/draft/recommendation-vm";
+import type { Position } from "@/lib/supabase/types";
 
-export function RecommendationsPanel({ recommendations }: { recommendations: RecommendationVM[] }) {
+/** Local props shape — avoid importing server helper modules into this client file. */
+interface RecommendationRow {
+  fpPlayerId: string;
+  name: string;
+  position: Position;
+  rationale: string;
+  byeWeek: number | null;
+  nflTeam: string | null;
+  rankAdp: number | null;
+}
+
+export function RecommendationsPanel({ recommendations }: { recommendations: RecommendationRow[] }) {
   const [filters, setFilters] = useState<BoardFilterState>(DEFAULT_BOARD_FILTERS);
   const { byeWeeks, nflTeams } = useBoardFilterOptions(recommendations);
 
