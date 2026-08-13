@@ -56,6 +56,10 @@ export interface PlayerRanking {
   rank_max: number | null;
   rank_std: number | null;
   tier: number | null;
+  /** Scoring-aware projected fantasy points (season / week 0). */
+  proj_points: number | null;
+  /** Raw FantasyPros projection stats blob (pass/rush/rec/etc.). */
+  proj_stats: Record<string, number> | null;
   synced_at: string;
 }
 

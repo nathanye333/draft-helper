@@ -6,7 +6,7 @@ import { computePositionScarcity } from "@/lib/analytics/scarcity";
 import { computeRecommendations } from "@/lib/analytics/recommendations";
 import { ValueLabelBadge } from "@/components/value-label-badge";
 import { ScarcityAlerts } from "@/components/analysis/scarcity-alerts";
-import { RecommendationsPanel } from "@/components/draft-room/recommendations-panel";
+import { RecommendationsPanel, toRecommendationVMs } from "@/components/draft-room/recommendations-panel";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import type { Position } from "@/lib/supabase/types";
 import type { PickWithDetails } from "@/lib/draft/data";
@@ -33,23 +33,26 @@ export default async function DraftAnalysisPage({ params }: PageProps<"/drafts/[
   );
 
   const recommendations = state.userTeam
-    ? computeRecommendations({
-        candidates: availablePlayers.map((p) => ({
-          fpPlayerId: p.fpPlayerId,
-          name: p.name,
-          position: p.position,
-          rankAdp: p.rankAdp,
-          rankEcr: p.rankEcr,
-        })),
-        currentPickNumber: state.currentPickNumber,
-        numTeams: bundle.draft.num_teams,
-        userDraftPosition: state.userTeam.draft_position,
-        rosterSlots: bundle.rosterSlots,
-        userAssignedSlots: bundle.picks
-          .filter((p) => p.team_id === state.userTeam!.id)
-          .map((p) => p.assigned_slot_type),
-        limit: 10,
-      })
+    ? toRecommendationVMs(
+        computeRecommendations({
+          candidates: availablePlayers.map((p) => ({
+            fpPlayerId: p.fpPlayerId,
+            name: p.name,
+            position: p.position,
+            rankAdp: p.rankAdp,
+            rankEcr: p.rankEcr,
+          })),
+          currentPickNumber: state.currentPickNumber,
+          numTeams: bundle.draft.num_teams,
+          userDraftPosition: state.userTeam.draft_position,
+          rosterSlots: bundle.rosterSlots,
+          userAssignedSlots: bundle.picks
+            .filter((p) => p.team_id === state.userTeam!.id)
+            .map((p) => p.assigned_slot_type),
+          limit: 25,
+        }),
+        availablePlayers,
+      )
     : [];
 
   return (

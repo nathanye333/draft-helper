@@ -6,7 +6,8 @@ import { computeRecommendations } from "@/lib/analytics/recommendations";
 import { PlayerSearch } from "@/components/draft-room/player-search";
 import { PickFeed } from "@/components/draft-room/pick-feed";
 import { MyRoster } from "@/components/draft-room/my-roster";
-import { RecommendationsPanel } from "@/components/draft-room/recommendations-panel";
+import { RecommendationsPanel, toRecommendationVMs } from "@/components/draft-room/recommendations-panel";
+import { ChatPanel } from "@/components/draft-room/chat-panel";
 import { UndoButton } from "@/components/draft-room/undo-button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
@@ -22,23 +23,26 @@ export default async function DraftRoomPage({ params }: PageProps<"/drafts/[id]"
   const pickFeed = toPickFeedVMs(bundle);
 
   const recommendations = state.userTeam
-    ? computeRecommendations({
-        candidates: availablePlayers.map((p) => ({
-          fpPlayerId: p.fpPlayerId,
-          name: p.name,
-          position: p.position,
-          rankAdp: p.rankAdp,
-          rankEcr: p.rankEcr,
-        })),
-        currentPickNumber: state.currentPickNumber,
-        numTeams: bundle.draft.num_teams,
-        userDraftPosition: state.userTeam.draft_position,
-        rosterSlots: bundle.rosterSlots,
-        userAssignedSlots: bundle.picks
-          .filter((p) => p.team_id === state.userTeam!.id)
-          .map((p) => p.assigned_slot_type),
-        limit: 8,
-      })
+    ? toRecommendationVMs(
+        computeRecommendations({
+          candidates: availablePlayers.map((p) => ({
+            fpPlayerId: p.fpPlayerId,
+            name: p.name,
+            position: p.position,
+            rankAdp: p.rankAdp,
+            rankEcr: p.rankEcr,
+          })),
+          currentPickNumber: state.currentPickNumber,
+          numTeams: bundle.draft.num_teams,
+          userDraftPosition: state.userTeam.draft_position,
+          rosterSlots: bundle.rosterSlots,
+          userAssignedSlots: bundle.picks
+            .filter((p) => p.team_id === state.userTeam!.id)
+            .map((p) => p.assigned_slot_type),
+          limit: 25,
+        }),
+        availablePlayers,
+      )
     : [];
 
   const myRoster = state.userTeam ? computeRosterForTeam(bundle, state.userTeam.id) : [];
@@ -108,6 +112,15 @@ export default async function DraftRoomPage({ params }: PageProps<"/drafts/[id]"
         </CardHeader>
         <CardContent>
           <RecommendationsPanel recommendations={recommendations} />
+        </CardContent>
+      </Card>
+
+      <Card className="mt-4">
+        <CardHeader>
+          <CardTitle>Draft agent</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <ChatPanel draftId={id} />
         </CardContent>
       </Card>
     </div>
