@@ -75,11 +75,14 @@ service-role key (via the FantasyPros sync route).
   `value_bonus * 0.5 + position_need * 0.3 + scarcity * 0.2`.
 - **Draft agent** — `lib/agent/`: LangChain ReAct chat on the live draft room.
   Bring-your-own OpenAI-compatible key (or Ollama locally). Read-only tools
-  query/aggregate the draft's rankings, wrap recommendations/scarcity, and
-  DuckDuckGo web search for news. Settings live in browser `localStorage`
-  and are sent per request (never stored server-side). Ollama requires a
-  tool-calling model (e.g. `llama3.1`) and only works when `next dev` can
-  reach your local Ollama daemon — not from Vercel to a home machine.
+  query/aggregate/sort the draft's **cached** FantasyPros rankings + season
+  projections (Postgres), wrap recommendations/scarcity, find ADP−ECR value
+  plays, analyze rosters, and DuckDuckGo search for news. Settings live in
+  browser `localStorage` and are sent per request (never stored server-side).
+  Ollama requires a tool-calling model (e.g. `llama3.1`) and only works when
+  `next dev` can reach your local Ollama daemon — not from Vercel to a home
+  machine. Re-run rankings sync after deploying the projections migration so
+  `proj_points` / `proj_stats` populate.
 
 Run `npm test` to run the unit tests for all of the above.
 

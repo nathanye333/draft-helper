@@ -200,7 +200,7 @@ export function ChatPanel({ draftId }: { draftId: string }) {
       <div className="flex max-h-80 min-h-40 flex-col gap-3 overflow-y-auto rounded-lg border border-slate-800 bg-slate-950/40 p-3">
         {messages.length === 0 ? (
           <p className="text-sm text-slate-500">
-            Ask about available RBs under ADP 50, compare two WRs, or check position scarcity.
+            Ask about top available RBs by projPoints, ADP−ECR value plays, or bye-week clusters.
           </p>
         ) : (
           messages.map((m, i) => (
