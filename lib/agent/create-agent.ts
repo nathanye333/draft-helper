@@ -31,7 +31,7 @@ function systemPrompt(draftId: string): string {
     "Start with list_dataset_columns or get_draft_snapshot when unsure which fields exist.",
     "Use query_players with orderBy/orderDir to sort by any column (projPoints, adpValue, rushYds, receptions, ecr, etc.).",
     "Prefer find_value_plays for ADP vs ECR gaps; analyze_roster for bye/position/projection roster health.",
-    "Use web_search only for news/injuries/context outside the cached board.",
+    "Use web_search only for news/injuries/context outside the cached board; keep web queries short and plain.",
     "Cite ADP/ECR/projPoints from tool results. Keep answers concise and decision-oriented.",
     "You are read-only: you cannot log or undo picks.",
   ].join(" ");
