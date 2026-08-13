@@ -1,9 +1,14 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { runDraftChatAgent } from "@/lib/agent/create-agent";
+import {
+  streamDraftChatAgent,
+} from "@/lib/agent/create-agent";
+import type { DraftAgentStreamEvent } from "@/lib/agent/stream-types";
 import { resolveOpenAiApiKey } from "@/lib/agent/server-llm";
 import { fetchDraftBundle } from "@/lib/draft/data";
 import { createClient } from "@/lib/supabase/server";
+
+export const maxDuration = 60;
 
 const chatBodySchema = z.object({
   messages: z
@@ -20,6 +25,10 @@ const chatBodySchema = z.object({
   baseUrl: z.string().max(500).optional(),
   apiKey: z.string().max(500).optional(),
 });
+
+function encodeEvent(event: DraftAgentStreamEvent): Uint8Array {
+  return new TextEncoder().encode(`${JSON.stringify(event)}\n`);
+}
 
 export async function POST(
   request: Request,
@@ -63,20 +72,35 @@ export async function POST(
     );
   }
 
-  try {
-    const result = await runDraftChatAgent({
-      draftId,
-      messages,
-      llm: { provider, model, baseUrl, apiKey },
-    });
+  const stream = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      try {
+        for await (const event of streamDraftChatAgent({
+          draftId,
+          messages,
+          llm: { provider, model, baseUrl, apiKey },
+          signal: request.signal,
+        })) {
+          controller.enqueue(encodeEvent(event));
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Agent failed";
+        controller.enqueue(encodeEvent({ type: "error", message }));
+        controller.enqueue(encodeEvent({ type: "done" }));
+      } finally {
+        controller.close();
+      }
+    },
+    cancel() {
+      // Client disconnect / AbortController — request.signal aborts the agent.
+    },
+  });
 
-    return NextResponse.json({
-      ok: true,
-      reply: result.reply,
-      toolCalls: result.toolCalls,
-    });
-  } catch (err) {
-    const message = err instanceof Error ? err.message : "Agent failed";
-    return NextResponse.json({ ok: false, message }, { status: 502 });
-  }
+  return new Response(stream, {
+    headers: {
+      "Content-Type": "application/x-ndjson; charset=utf-8",
+      "Cache-Control": "no-cache, no-transform",
+      "X-Accel-Buffering": "no",
+    },
+  });
 }

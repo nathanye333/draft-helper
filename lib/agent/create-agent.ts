@@ -2,6 +2,9 @@ import { createAgent, HumanMessage, AIMessage, ToolMessage } from "langchain";
 import type { BaseMessage } from "@langchain/core/messages";
 import { createChatModel, type LlmConfig } from "@/lib/agent/model";
 import { createDraftTools } from "@/lib/agent/tools";
+import type { DraftAgentStreamEvent } from "@/lib/agent/stream-types";
+
+export type { DraftAgentStreamEvent } from "@/lib/agent/stream-types";
 
 export interface ChatTurn {
   role: "user" | "assistant";
@@ -9,6 +12,7 @@ export interface ChatTurn {
 }
 
 export interface ToolCallTrace {
+  id?: string;
   name: string;
   input: unknown;
   output: string;
@@ -88,6 +92,7 @@ function enrichToolCalls(messages: BaseMessage[]): ToolCallTrace[] {
     if (!ToolMessage.isInstance(msg)) continue;
     const meta = msg.tool_call_id ? callArgs.get(msg.tool_call_id) : undefined;
     traces.push({
+      id: msg.tool_call_id,
       name: meta?.name ?? msg.name ?? "tool",
       input: meta?.args ?? null,
       output: extractText(msg.content).slice(0, 4000),
@@ -96,19 +101,67 @@ function enrichToolCalls(messages: BaseMessage[]): ToolCallTrace[] {
   return traces;
 }
 
+function createAgentForDraft(draftId: string, llm: LlmConfig) {
+  return createAgent({
+    model: createChatModel(llm),
+    tools: createDraftTools(draftId),
+    systemPrompt: systemPrompt(draftId),
+  });
+}
+
+/** Simple async fan-in queue for parallel message/tool streams. */
+function createEventQueue<T>() {
+  const buffer: T[] = [];
+  const waiters: Array<(item: IteratorResult<T>) => void> = [];
+  let closed = false;
+  let failure: unknown;
+
+  return {
+    push(item: T) {
+      if (closed) return;
+      const waiter = waiters.shift();
+      if (waiter) waiter({ value: item, done: false });
+      else buffer.push(item);
+    },
+    fail(err: unknown) {
+      if (closed) return;
+      failure = err;
+      closed = true;
+      while (waiters.length) {
+        waiters.shift()!({ value: undefined as T, done: true });
+      }
+    },
+    close() {
+      if (closed) return;
+      closed = true;
+      while (waiters.length) {
+        waiters.shift()!({ value: undefined as T, done: true });
+      }
+    },
+    async *iterate(): AsyncGenerator<T> {
+      while (true) {
+        if (buffer.length > 0) {
+          yield buffer.shift()!;
+          continue;
+        }
+        if (closed) break;
+        const next = await new Promise<IteratorResult<T>>((resolve) => {
+          waiters.push(resolve);
+        });
+        if (next.done) break;
+        yield next.value;
+      }
+      if (failure) throw failure;
+    },
+  };
+}
+
 export async function runDraftChatAgent(params: {
   draftId: string;
   messages: ChatTurn[];
   llm: LlmConfig;
 }): Promise<AgentRunResult> {
-  const model = createChatModel(params.llm);
-  const tools = createDraftTools(params.draftId);
-
-  const agent = createAgent({
-    model,
-    tools,
-    systemPrompt: systemPrompt(params.draftId),
-  });
+  const agent = createAgentForDraft(params.draftId, params.llm);
 
   const result = await agent.invoke({
     messages: toLangChainMessages(params.messages),
@@ -119,10 +172,122 @@ export async function runDraftChatAgent(params: {
   const reply = lastAi ? extractText(lastAi.content) : "No response from the model.";
   const toolCalls = enrichToolCalls(resultMessages);
 
-  // Fallback if enrich found nothing but tools ran
   if (toolCalls.length === 0) {
     return { reply, toolCalls: collectToolCalls(resultMessages) };
   }
 
   return { reply, toolCalls };
+}
+
+/**
+ * Stream tokens / reasoning / tool events via LangChain ReactAgent streamEvents v3.
+ * Honors AbortSignal for Stop.
+ */
+export async function* streamDraftChatAgent(params: {
+  draftId: string;
+  messages: ChatTurn[];
+  llm: LlmConfig;
+  signal?: AbortSignal;
+}): AsyncGenerator<DraftAgentStreamEvent> {
+  if (params.signal?.aborted) {
+    yield { type: "done", stopped: true };
+    return;
+  }
+
+  const agent = createAgentForDraft(params.draftId, params.llm);
+  const queue = createEventQueue<DraftAgentStreamEvent>();
+
+  const runPromise = (async () => {
+    const run = await agent.streamEvents(
+      { messages: toLangChainMessages(params.messages) },
+      { version: "v3", signal: params.signal },
+    );
+
+    const messagePump = (async () => {
+      for await (const msg of run.messages) {
+        await Promise.all([
+          (async () => {
+            try {
+              for await (const delta of msg.reasoning) {
+                if (params.signal?.aborted) return;
+                if (delta) queue.push({ type: "reasoning", delta });
+              }
+            } catch {
+              // Some models have no reasoning channel.
+            }
+          })(),
+          (async () => {
+            for await (const delta of msg.text) {
+              if (params.signal?.aborted) return;
+              if (delta) queue.push({ type: "token", delta });
+            }
+          })(),
+        ]);
+      }
+    })();
+
+    const toolPump = (async () => {
+      for await (const call of run.toolCalls) {
+        if (params.signal?.aborted) return;
+        const id = call.callId || `${call.name}-${Date.now()}`;
+        queue.push({
+          type: "tool_start",
+          id,
+          name: call.name,
+          input: call.input ?? null,
+        });
+        try {
+          const [output, status, error] = await Promise.all([
+            call.output.catch(() => undefined),
+            call.status.catch(() => "error" as const),
+            call.error.catch(() => undefined),
+          ]);
+          const text =
+            error ||
+            (output !== undefined ? extractText(output).slice(0, 4000) : "") ||
+            (status === "error" ? "Tool failed" : "");
+          queue.push({
+            type: "tool_end",
+            id,
+            name: call.name,
+            output: text,
+          });
+        } catch (err) {
+          queue.push({
+            type: "tool_end",
+            id,
+            name: call.name,
+            output: err instanceof Error ? err.message : "Tool failed",
+          });
+        }
+      }
+    })();
+
+    await Promise.all([messagePump, toolPump]);
+  })();
+
+  const finished = runPromise
+    .then(() => {
+      queue.push({ type: "done", stopped: Boolean(params.signal?.aborted) });
+      queue.close();
+    })
+    .catch((err) => {
+      if (params.signal?.aborted) {
+        queue.push({ type: "done", stopped: true });
+        queue.close();
+        return;
+      }
+      const message = err instanceof Error ? err.message : "Agent failed";
+      queue.push({ type: "error", message });
+      queue.push({ type: "done" });
+      queue.close();
+    });
+
+  try {
+    for await (const event of queue.iterate()) {
+      yield event;
+    }
+  } finally {
+    await finished;
+  }
 }

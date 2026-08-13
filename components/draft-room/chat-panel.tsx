@@ -9,16 +9,28 @@ import {
   type StoredLlmSettings,
 } from "@/lib/agent/llm-settings";
 import { fallbackModels } from "@/lib/agent/list-models";
-import { Badge } from "@/components/ui/badge";
+import type { DraftAgentStreamEvent } from "@/lib/agent/stream-types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
 
+interface ToolCallVM {
+  id: string;
+  name: string;
+  input: unknown;
+  output?: string;
+  status: "running" | "done";
+}
+
 interface ChatMessage {
+  id: string;
   role: "user" | "assistant";
   content: string;
-  toolCalls?: { name: string; input: unknown; output: string }[];
+  reasoning?: string;
+  toolCalls?: ToolCallVM[];
+  streaming?: boolean;
+  stopped?: boolean;
 }
 
 const LLM_SETTINGS_EVENT = "draft-helper-llm-settings";
@@ -37,6 +49,84 @@ function subscribeLlmSettings(onStoreChange: () => void) {
 function persistSettings(settings: StoredLlmSettings) {
   saveLlmSettings(settings);
   window.dispatchEvent(new Event(LLM_SETTINGS_EVENT));
+}
+
+function newId() {
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+}
+
+function ThinkingBlock({
+  text,
+  streaming,
+}: {
+  text: string;
+  streaming?: boolean;
+}) {
+  const [open, setOpen] = useState(true);
+  if (!text && !streaming) return null;
+
+  return (
+    <div className="mb-2 overflow-hidden rounded-md border border-slate-800/80 bg-slate-900/40">
+      <button
+        type="button"
+        className="flex w-full items-center justify-between gap-2 px-2.5 py-1.5 text-left text-xs text-slate-400 hover:bg-slate-800/40"
+        onClick={() => setOpen((o) => !o)}
+      >
+        <span className="font-medium text-slate-300">
+          {streaming && !text ? "Thinking…" : "Thoughts"}
+          {streaming ? (
+            <span className="ml-1 inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-400 align-middle" />
+          ) : null}
+        </span>
+        <span className="text-slate-500">{open ? "Hide" : "Show"}</span>
+      </button>
+      {open ? (
+        <div className="border-t border-slate-800/80 px-2.5 py-2 text-xs leading-relaxed whitespace-pre-wrap text-slate-500 italic">
+          {text || (streaming ? "…" : "")}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function ToolCallRows({ tools }: { tools: ToolCallVM[] }) {
+  if (tools.length === 0) return null;
+  return (
+    <div className="mb-2 space-y-1.5">
+      {tools.map((t) => (
+        <details
+          key={t.id}
+          className="rounded-md border border-slate-800/80 bg-slate-900/30 text-xs open:bg-slate-900/50"
+        >
+          <summary className="cursor-pointer list-none px-2.5 py-1.5 text-slate-300 marker:content-none [&::-webkit-details-marker]:hidden">
+            <span className="mr-2 inline-flex items-center gap-1.5">
+              <span
+                className={
+                  t.status === "running"
+                    ? "inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-amber-400"
+                    : "inline-block h-1.5 w-1.5 rounded-full bg-emerald-500"
+                }
+              />
+              <span className="font-mono text-[11px] text-slate-200">{t.name}</span>
+            </span>
+            <span className="text-slate-500">
+              {t.status === "running" ? "running…" : "done"}
+            </span>
+          </summary>
+          <div className="space-y-2 border-t border-slate-800/80 px-2.5 py-2 text-[11px] text-slate-400">
+            <pre className="max-h-28 overflow-auto whitespace-pre-wrap break-all rounded bg-slate-950/60 p-2">
+              {JSON.stringify(t.input, null, 2)}
+            </pre>
+            {t.output ? (
+              <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-all rounded bg-slate-950/60 p-2 text-slate-300">
+                {t.output}
+              </pre>
+            ) : null}
+          </div>
+        </details>
+      ))}
+    </div>
+  );
 }
 
 export function ChatPanel({ draftId }: { draftId: string }) {
@@ -59,6 +149,8 @@ export function ChatPanel({ draftId }: { draftId: string }) {
   const [hasServerOpenAiKey, setHasServerOpenAiKey] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const scanSeq = useRef(0);
+  const abortRef = useRef<AbortController | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -90,7 +182,6 @@ export function ChatPanel({ draftId }: { draftId: string }) {
     }
 
     try {
-      // Prefer browser → Ollama when provider is local (preview server can't see your laptop).
       if (settings.provider === "ollama") {
         const base = (settings.baseUrl.trim() || "http://127.0.0.1:11434").replace(/\/$/, "");
         const res = await fetch(`${base}/api/tags`);
@@ -168,7 +259,6 @@ export function ChatPanel({ draftId }: { draftId: string }) {
       void scanModels({ silent: false });
     }, 250);
     return () => window.clearTimeout(t);
-    // Re-scan when provider / endpoint / key change while settings are open.
     // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional scan triggers
   }, [settingsOpen, settings.provider, settings.baseUrl, settings.apiKey]);
 
@@ -206,22 +296,53 @@ export function ChatPanel({ draftId }: { draftId: string }) {
     setModelsError(null);
   }
 
+  function stop() {
+    abortRef.current?.abort();
+  }
+
+  function patchAssistant(
+    assistantId: string,
+    patch: (msg: ChatMessage) => ChatMessage,
+  ) {
+    setMessages((prev) => prev.map((m) => (m.id === assistantId ? patch(m) : m)));
+  }
+
   async function send() {
     const content = input.trim();
     if (!canSend || !content) return;
 
-    const nextMessages: ChatMessage[] = [...messages, { role: "user", content }];
-    setMessages(nextMessages);
+    const userMsg: ChatMessage = { id: newId(), role: "user", content };
+    const assistantId = newId();
+    const historyForApi = [...messages, userMsg]
+      .filter((m) => m.role === "user" || m.content.trim())
+      .map((m) => ({ role: m.role, content: m.content }));
+
+    setMessages((prev) => [
+      ...prev,
+      userMsg,
+      {
+        id: assistantId,
+        role: "assistant",
+        content: "",
+        reasoning: "",
+        toolCalls: [],
+        streaming: true,
+      },
+    ]);
     setInput("");
     setBusy(true);
     setError(null);
+
+    const ac = new AbortController();
+    abortRef.current = ac;
 
     try {
       const res = await fetch(`/api/drafts/${draftId}/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        signal: ac.signal,
         body: JSON.stringify({
-          messages: nextMessages.map((m) => ({ role: m.role, content: m.content })),
+          messages: historyForApi,
           provider: settings.provider,
           model: settings.model,
           baseUrl: settings.baseUrl || undefined,
@@ -229,44 +350,140 @@ export function ChatPanel({ draftId }: { draftId: string }) {
         }),
       });
 
-      const data = (await res.json()) as {
-        ok: boolean;
-        reply?: string;
-        toolCalls?: ChatMessage["toolCalls"];
-        message?: string;
-      };
-
-      if (!res.ok || !data.ok || !data.reply) {
-        throw new Error(data.message ?? `Request failed (${res.status})`);
+      if (!res.ok || !res.body) {
+        const data = (await res.json().catch(() => null)) as { message?: string } | null;
+        throw new Error(data?.message ?? `Request failed (${res.status})`);
       }
 
-      setMessages((prev) => [
-        ...prev,
-        { role: "assistant", content: data.reply!, toolCalls: data.toolCalls },
-      ]);
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed) continue;
+          let event: DraftAgentStreamEvent;
+          try {
+            event = JSON.parse(trimmed) as DraftAgentStreamEvent;
+          } catch {
+            continue;
+          }
+
+          if (event.type === "reasoning") {
+            const delta = event.delta;
+            patchAssistant(assistantId, (m) => ({
+              ...m,
+              reasoning: `${m.reasoning ?? ""}${delta}`,
+            }));
+          } else if (event.type === "token") {
+            const delta = event.delta;
+            patchAssistant(assistantId, (m) => ({
+              ...m,
+              content: `${m.content}${delta}`,
+            }));
+          } else if (event.type === "tool_start") {
+            const start = event;
+            patchAssistant(assistantId, (m) => ({
+              ...m,
+              toolCalls: [
+                ...(m.toolCalls ?? []),
+                {
+                  id: start.id,
+                  name: start.name,
+                  input: start.input,
+                  status: "running",
+                },
+              ],
+            }));
+          } else if (event.type === "tool_end") {
+            const end = event;
+            patchAssistant(assistantId, (m) => ({
+              ...m,
+              toolCalls: (m.toolCalls ?? []).map((t) =>
+                t.id === end.id
+                  ? { ...t, output: end.output, status: "done" as const }
+                  : t,
+              ),
+            }));
+          } else if (event.type === "error") {
+            setError(event.message);
+          } else if (event.type === "done") {
+            const stopped = Boolean(event.stopped);
+            patchAssistant(assistantId, (m) => ({
+              ...m,
+              streaming: false,
+              stopped,
+              content:
+                m.content.trim() ||
+                (stopped ? "Stopped." : m.reasoning ? "" : "No response from the model."),
+            }));
+          }
+        }
+      }
+
+      patchAssistant(assistantId, (m) =>
+        m.streaming
+          ? {
+              ...m,
+              streaming: false,
+              stopped: ac.signal.aborted,
+              content:
+                m.content.trim() ||
+                (ac.signal.aborted ? "Stopped." : "No response from the model."),
+            }
+          : m,
+      );
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Chat failed");
+      if (ac.signal.aborted || (err instanceof DOMException && err.name === "AbortError")) {
+        patchAssistant(assistantId, (m) => ({
+          ...m,
+          streaming: false,
+          stopped: true,
+          content: m.content.trim() || "Stopped.",
+        }));
+      } else {
+        setError(err instanceof Error ? err.message : "Chat failed");
+        patchAssistant(assistantId, (m) => ({
+          ...m,
+          streaming: false,
+          content: m.content.trim() || "Something went wrong.",
+        }));
+      }
     } finally {
+      abortRef.current = null;
       setBusy(false);
+      textareaRef.current?.focus();
     }
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-3">
-      <div className="flex shrink-0 items-center justify-between gap-2">
-        <p className="text-xs text-slate-500">BYOK · settings stay in this browser</p>
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="flex shrink-0 items-center justify-between gap-2 border-b border-slate-800/80 pb-2">
+        <p className="truncate text-[11px] text-slate-500">
+          {settings.model}
+          {settings.provider === "openai" && hasServerOpenAiKey && !settings.apiKey.trim()
+            ? " · account key"
+            : ""}
+        </p>
         <Button
           type="button"
           variant="ghost"
           size="sm"
           onClick={() => setSettingsOpen((o) => !o)}
         >
-          {settingsOpen ? "Hide settings" : "LLM settings"}
+          {settingsOpen ? "Hide" : "Settings"}
         </Button>
       </div>
 
       {settingsOpen ? (
-        <div className="grid shrink-0 gap-3 rounded-lg border border-slate-800 bg-slate-950/50 p-3">
+        <div className="mt-2 max-h-[42%] shrink-0 space-y-3 overflow-y-auto rounded-lg border border-slate-800 bg-slate-950/50 p-3">
           <div className="space-y-1.5">
             <Label htmlFor="llm-provider">Provider</Label>
             <Select
@@ -311,8 +528,8 @@ export function ChatPanel({ draftId }: { draftId: string }) {
             </Select>
             <p className="text-xs text-slate-500">
               {modelsSource === "live"
-                ? `Showing ${selectModels.length} model${selectModels.length === 1 ? "" : "s"} from ${settings.provider === "ollama" ? "Ollama" : "your API"}.`
-                : "Using fallback list until a live scan succeeds."}
+                ? `Showing ${selectModels.length} models.`
+                : "Fallback list until scan succeeds."}
               {modelsError ? ` ${modelsError}` : ""}
             </p>
           </div>
@@ -350,109 +567,98 @@ export function ChatPanel({ draftId }: { draftId: string }) {
                     : "sk-…"
               }
             />
-            {settings.provider === "openai" && hasServerOpenAiKey && !settings.apiKey.trim() ? (
-              <p className="text-xs text-emerald-500/90">Using your account&apos;s server default key.</p>
-            ) : null}
           </div>
 
           {settings.provider === "ollama" ? (
-            <div className="space-y-1.5 rounded-md border border-slate-800 bg-slate-900/60 p-3 text-xs text-slate-400">
-              <p className="font-medium text-slate-300">Connect Ollama</p>
-              <ol className="list-decimal space-y-1 pl-4">
-                <li>
-                  Install from{" "}
-                  <a
-                    className="text-emerald-400 hover:underline"
-                    href="https://ollama.com"
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    ollama.com
-                  </a>
-                  , then start it (tray icon / <code className="text-slate-300">ollama serve</code>).
-                </li>
-                <li>
-                  Pull a tool-capable model:{" "}
-                  <code className="text-slate-300">ollama pull llama3.1</code>
-                </li>
-                <li>
-                  Leave Base URL as <code className="text-slate-300">http://127.0.0.1:11434</code> and
-                  hit Refresh — the dropdown should fill from your machine.
-                </li>
-                <li>
-                  Run the app with <code className="text-slate-300">npm run dev</code> locally.
-                  Vercel preview/production cannot reach your laptop&apos;s Ollama (chat runs on the
-                  server).
-                </li>
-              </ol>
-              <p>
-                If the browser scan is blocked by CORS, set{" "}
-                <code className="text-slate-300">OLLAMA_ORIGINS=*</code> and restart Ollama.
-              </p>
-            </div>
-          ) : (
             <p className="text-xs text-slate-500">
-              Works with OpenAI, OpenRouter, Groq, etc. Paste an API key, set Base URL if needed, then
-              Refresh to load models.
+              Ollama chat needs local <code className="text-slate-300">npm run dev</code>. Set{" "}
+              <code className="text-slate-300">OLLAMA_ORIGINS=*</code> if browser scan is blocked.
             </p>
-          )}
+          ) : null}
         </div>
       ) : null}
 
-      <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto rounded-lg border border-slate-800 bg-slate-950/40 p-3">
+      <div className="mt-2 flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-0.5 py-1">
         {messages.length === 0 ? (
-          <p className="text-sm text-slate-500">
-            Ask about top available RBs by projPoints, ADP−ECR value plays, or bye-week clusters.
-          </p>
+          <div className="flex flex-1 flex-col justify-center gap-2 px-1 text-sm text-slate-500">
+            <p className="font-medium text-slate-300">Draft agent</p>
+            <p>Ask about available RBs, ADP value, bye clusters, or roster needs.</p>
+          </div>
         ) : (
-          messages.map((m, i) => (
-            <div
-              key={`${m.role}-${i}`}
-              className={m.role === "user" ? "ml-4 text-right" : "mr-4 text-left"}
-            >
-              <div
-                className={
-                  m.role === "user"
-                    ? "inline-block rounded-lg bg-emerald-900/40 px-3 py-2 text-sm text-emerald-50"
-                    : "inline-block rounded-lg bg-slate-800/80 px-3 py-2 text-sm text-slate-100"
-                }
-              >
-                <p className="whitespace-pre-wrap">{m.content}</p>
-              </div>
-              {m.toolCalls && m.toolCalls.length > 0 ? (
-                <div className="mt-1.5 flex flex-wrap gap-1">
-                  {m.toolCalls.map((t, ti) => (
-                    <Badge key={`${t.name}-${ti}`} variant="info" title={String(t.input ?? "")}>
-                      {t.name}
-                    </Badge>
-                  ))}
+          messages.map((m) => (
+            <div key={m.id} className="px-0.5">
+              {m.role === "user" ? (
+                <div className="ml-6 rounded-2xl bg-slate-800/70 px-3 py-2 text-sm text-slate-100">
+                  <p className="whitespace-pre-wrap">{m.content}</p>
                 </div>
-              ) : null}
+              ) : (
+                <div className="mr-2 text-sm text-slate-100">
+                  <ThinkingBlock
+                    text={m.reasoning ?? ""}
+                    streaming={Boolean(m.streaming && !(m.content || "").trim())}
+                  />
+                  <ToolCallRows tools={m.toolCalls ?? []} />
+                  {m.content ? (
+                    <p className="whitespace-pre-wrap leading-relaxed">
+                      {m.content}
+                      {m.streaming ? (
+                        <span className="ml-0.5 inline-block h-3.5 w-[2px] animate-pulse bg-emerald-400 align-middle" />
+                      ) : null}
+                    </p>
+                  ) : m.streaming ? (
+                    <p className="text-xs text-slate-500">
+                      Generating
+                      <span className="ml-0.5 inline-block h-3.5 w-[2px] animate-pulse bg-emerald-400 align-middle" />
+                    </p>
+                  ) : null}
+                  {m.stopped ? (
+                    <p className="mt-1 text-[11px] text-slate-500">Stopped</p>
+                  ) : null}
+                </div>
+              )}
             </div>
           ))
         )}
-        {busy ? <p className="text-xs text-slate-500">Thinking…</p> : null}
         <div ref={bottomRef} />
       </div>
 
-      {error ? <p className="shrink-0 text-sm text-red-400">{error}</p> : null}
+      {error ? <p className="shrink-0 pt-1 text-sm text-red-400">{error}</p> : null}
 
       <form
-        className="flex shrink-0 gap-2"
+        className="mt-2 shrink-0 rounded-xl border border-slate-700 bg-slate-900/80 p-2 shadow-inner shadow-black/20"
         onSubmit={(e) => {
           e.preventDefault();
-          void send();
+          if (busy) stop();
+          else void send();
         }}
       >
-        <Input
+        <textarea
+          ref={textareaRef}
           value={input}
+          rows={2}
           onChange={(e) => setInput(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.shiftKey) {
+              e.preventDefault();
+              if (!busy && canSend) void send();
+            }
+          }}
           placeholder="Ask the draft agent…"
-          disabled={busy}
+          disabled={false}
+          className="max-h-40 min-h-[52px] w-full resize-none bg-transparent px-1.5 py-1 text-sm text-slate-100 placeholder:text-slate-500 focus:outline-none"
         />
-        <Button type="submit" disabled={!canSend}>
-          Send
-        </Button>
+        <div className="mt-1 flex items-center justify-between gap-2">
+          <p className="text-[10px] text-slate-600">Enter send · Shift+Enter newline</p>
+          {busy ? (
+            <Button type="button" variant="secondary" size="sm" onClick={stop}>
+              Stop
+            </Button>
+          ) : (
+            <Button type="submit" size="sm" disabled={!canSend}>
+              Send
+            </Button>
+          )}
+        </div>
       </form>
     </div>
   );

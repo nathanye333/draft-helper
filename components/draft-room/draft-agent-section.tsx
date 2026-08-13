@@ -64,8 +64,8 @@ export function DraftAgentSection({ draftId }: { draftId: string }) {
       <aside
         className={
           open
-            ? "fixed inset-y-0 right-0 z-50 flex w-full max-w-md translate-x-0 flex-col border-l border-slate-800 bg-slate-950 shadow-2xl shadow-black/50 transition-transform duration-200 ease-out"
-            : "pointer-events-none fixed inset-y-0 right-0 z-50 flex w-full max-w-md translate-x-full flex-col border-l border-slate-800 bg-slate-950 shadow-2xl shadow-black/50 transition-transform duration-200 ease-out"
+            ? "fixed inset-y-0 right-0 z-50 flex w-full max-w-lg translate-x-0 flex-col border-l border-slate-800 bg-slate-950 shadow-2xl shadow-black/50 transition-transform duration-200 ease-out"
+            : "pointer-events-none fixed inset-y-0 right-0 z-50 flex w-full max-w-lg translate-x-full flex-col border-l border-slate-800 bg-slate-950 shadow-2xl shadow-black/50 transition-transform duration-200 ease-out"
         }
         aria-hidden={!open}
       >
