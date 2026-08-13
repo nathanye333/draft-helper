@@ -1,5 +1,4 @@
 import { tool } from "langchain";
-import { search, SafeSearchType } from "duck-duck-scrape";
 import { z } from "zod";
 import { computeRecommendations } from "@/lib/analytics/recommendations";
 import { computePositionScarcity } from "@/lib/analytics/scarcity";
@@ -17,6 +16,7 @@ import {
   queryPlayers,
   type PlayerRow,
 } from "@/lib/agent/player-query";
+import { searchWeb } from "@/lib/agent/web-search";
 import type { Position } from "@/lib/supabase/types";
 
 const positionSchema = z.enum(["QB", "RB", "WR", "TE", "K", "DST"]);
@@ -314,20 +314,13 @@ export function createDraftTools(draftId: string) {
 
   const web_search = tool(
     async (input) => {
-      const result = await search(input.query, {
-        safeSearch: SafeSearchType.MODERATE,
-      });
-      const results = (result.results ?? []).slice(0, input.maxResults ?? 5).map((r) => ({
-        title: r.title,
-        url: r.url,
-        snippet: r.description,
-      }));
-      return json({ query: input.query, results });
+      const result = await searchWeb(input.query, input.maxResults ?? 5);
+      return json(result);
     },
     {
       name: "web_search",
       description:
-        "Search the web (DuckDuckGo) for news, injuries, or context. Prefer draft DB tools for ADP/ECR/projections.",
+        "Search recent news/injuries/context (news RSS or Brave if configured). Prefer draft DB tools for ADP/ECR/projections — do not use this for ranks.",
       schema: z.object({
         query: z.string(),
         maxResults: z.number().int().min(1).max(8).optional().default(5),
