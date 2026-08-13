@@ -14,11 +14,14 @@ describe("picksUntilNextTurn", () => {
 });
 
 describe("computeRecommendations", () => {
-  it("ranks value + need + scarcity above a raw best-player-available pick", () => {
+  it("ranks a fallen ADP player with roster need above a filled-position elite", () => {
     const result = computeRecommendations({
       candidates: [
-        { fpPlayerId: "rb1", name: "Falling RB", position: "RB", rankAdp: 30, rankEcr: 10 },
-        { fpPlayerId: "qb1", name: "Elite QB", position: "QB", rankAdp: 15, rankEcr: 1 },
+        // ADP 8 still there at pick 15 → +7 value, and RB starters empty
+        { fpPlayerId: "rb1", name: "Falling RB", position: "RB", rankAdp: 8, rankEcr: 10 },
+        { fpPlayerId: "qb1", name: "Elite QB", position: "QB", rankAdp: 12, rankEcr: 1 },
+        // Deep sleeper must not win on inverted ADP math
+        { fpPlayerId: "rb2", name: "Deep Sleeper", position: "RB", rankAdp: 400, rankEcr: 200 },
       ],
       currentPickNumber: 15,
       numTeams: 10,
@@ -31,6 +34,26 @@ describe("computeRecommendations", () => {
     expect(result[0].fpPlayerId).toBe("rb1");
     expect(result[0].rationale).toContain("RB need");
     expect(result[0].rationale).toContain("ADP value");
+    expect(result.find((r) => r.fpPlayerId === "rb2")!.score).toBeLessThan(result[0].score);
+  });
+
+  it("does not recommend deep sleepers over top ADP players early in the draft", () => {
+    const result = computeRecommendations({
+      candidates: [
+        { fpPlayerId: "elite", name: "Elite RB", position: "RB", rankAdp: 3, rankEcr: 3 },
+        { fpPlayerId: "sleeper", name: "Louis Sleeper", position: "RB", rankAdp: 600, rankEcr: 400 },
+        { fpPlayerId: "kicker", name: "Random K", position: "K", rankAdp: 594, rankEcr: 50 },
+      ],
+      currentPickNumber: 5,
+      numTeams: 10,
+      userDraftPosition: 5,
+      rosterSlots: DEFAULT_ROSTER_SLOTS,
+      userAssignedSlots: [],
+      limit: 3,
+    });
+
+    expect(result[0].fpPlayerId).toBe("elite");
+    expect(result[0].rationale).not.toMatch(/\+\d{2,} ADP value/);
   });
 
   it("returns at most `limit` recommendations sorted by score descending", () => {
@@ -56,5 +79,7 @@ describe("computeRecommendations", () => {
     for (let i = 1; i < result.length; i++) {
       expect(result[i - 1].score).toBeGreaterThanOrEqual(result[i].score);
     }
+    // Lowest ADP still available should rank first when need/scarcity are equal
+    expect(result[0].fpPlayerId).toBe("p0");
   });
 });

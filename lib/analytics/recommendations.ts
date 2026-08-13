@@ -1,3 +1,4 @@
+import { computeAdpDelta } from "@/lib/analytics/value";
 import { getTeamPositionForPick } from "@/lib/draft/snake";
 import type { Position, RosterSlot, SlotType } from "@/lib/supabase/types";
 
@@ -80,7 +81,7 @@ function totalStarterSlots(
  * per the plan's weighted formula:
  *
  *   score = value_bonus * 0.5 + position_need * 0.3 + scarcity * 0.2
- *   value_bonus   = rank_adp - current_pick_number   (positive = still available past ADP)
+ *   value_bonus   = current_pick_number - rank_adp   (positive = available past ADP)
  *   position_need = empty_starter_slots[pos] / total_starter_slots
  *   scarcity      = top_N_remaining_at_position / picks_until_next_user_pick
  *
@@ -105,7 +106,7 @@ export function computeRecommendations({
   }
 
   const scored = candidates.map((c) => {
-    const valueBonus = c.rankAdp != null ? c.rankAdp - currentPickNumber : 0;
+    const valueBonus = computeAdpDelta(currentPickNumber, c.rankAdp) ?? 0;
     const emptySlots = emptyStarterSlotsForPosition(c.position, rosterSlots, userAssignedSlots);
     const positionNeed = totalStarters > 0 ? emptySlots / totalStarters : 0;
     const topRemaining = remainingCountByPosition.get(c.position) ?? 0;
