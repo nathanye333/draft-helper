@@ -7,6 +7,7 @@ import { PlayerSearch } from "@/components/draft-room/player-search";
 import { PickFeed } from "@/components/draft-room/pick-feed";
 import { MyRoster } from "@/components/draft-room/my-roster";
 import { RecommendationsPanel } from "@/components/draft-room/recommendations-panel";
+import { ChatPanel } from "@/components/draft-room/chat-panel";
 import { UndoButton } from "@/components/draft-room/undo-button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
@@ -108,6 +109,15 @@ export default async function DraftRoomPage({ params }: PageProps<"/drafts/[id]"
         </CardHeader>
         <CardContent>
           <RecommendationsPanel recommendations={recommendations} />
+        </CardContent>
+      </Card>
+
+      <Card className="mt-4">
+        <CardHeader>
+          <CardTitle>Draft agent</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <ChatPanel draftId={id} />
         </CardContent>
       </Card>
     </div>

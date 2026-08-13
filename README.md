@@ -18,6 +18,7 @@ Vercel + Supabase Cloud in production.
 | Database / Auth   | Supabase (Postgres + Auth + Row Level Security)     |
 | Styling           | Tailwind CSS + small shadcn-style UI primitives     |
 | External data     | FantasyPros consensus rankings API (server-only)    |
+| Draft agent       | LangChain ReAct (`createAgent`) + BYOK / Ollama     |
 | Tests             | Vitest (core draft/analytics logic)                 |
 
 ## Project structure
@@ -29,15 +30,17 @@ app/
   auth/callback/               # Supabase auth code exchange
   drafts/new/                  # Setup wizard (client)
   drafts/[id]/setup/           # Rankings sync + "start draft" step
-  drafts/[id]/page.tsx         # Live draft room
+  drafts/[id]/page.tsx         # Live draft room (+ draft agent chat)
   drafts/[id]/board/           # Full draft board grid
   drafts/[id]/analysis/        # Reach/steal leaderboard, scarcity, recs
   api/rankings/sync/route.ts   # FantasyPros sync endpoint
+  api/drafts/[id]/chat/        # LangChain draft agent (BYOK)
   actions/draft.ts             # Server actions: createDraft, logPick, undo, ...
 lib/
   supabase/                    # Browser/server/admin Supabase clients + types
   draft/                       # Snake order, slot assignment, data loading
   analytics/                   # ADP delta/reach classification, scarcity, recs
+  agent/                       # LangChain model + read-only analysis tools
   fantasypros/                 # FantasyPros API client + sync logic
 components/
   ui/                          # Button, Input, Card, Badge, Select, Label
@@ -70,6 +73,13 @@ service-role key (via the FantasyPros sync route).
 - **Recommendations** — `lib/analytics/recommendations.ts`: scores each
   available player for your team using
   `value_bonus * 0.5 + position_need * 0.3 + scarcity * 0.2`.
+- **Draft agent** — `lib/agent/`: LangChain ReAct chat on the live draft room.
+  Bring-your-own OpenAI-compatible key (or Ollama locally). Read-only tools
+  query/aggregate the draft's rankings, wrap recommendations/scarcity, and
+  DuckDuckGo web search for news. Settings live in browser `localStorage`
+  and are sent per request (never stored server-side). Ollama requires a
+  tool-calling model (e.g. `llama3.1`) and only works when `next dev` can
+  reach your local Ollama daemon — not from Vercel to a home machine.
 
 Run `npm test` to run the unit tests for all of the above.
 
@@ -163,3 +173,6 @@ npm run lint
 - Sleeper/ESPN live import — picks are entered manually
 - Dynasty/rookie-specific rankings
 - Player headshots (FantasyPros image licensing)
+- Streaming agent tokens / persisted chat history
+- Agent write tools (log/undo picks)
+- Production Ollama through Vercel (use local `next dev` for Ollama)
