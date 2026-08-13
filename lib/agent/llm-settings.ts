@@ -16,11 +16,13 @@ export const DEFAULT_LLM_SETTINGS: StoredLlmSettings = {
   apiKey: "",
 };
 
-export function loadLlmSettings(): StoredLlmSettings {
-  if (typeof window === "undefined") return { ...DEFAULT_LLM_SETTINGS };
+/** Cached so useSyncExternalStore getSnapshot stays referentially stable. */
+let cachedRaw: string | null | undefined;
+let cachedSettings: StoredLlmSettings = DEFAULT_LLM_SETTINGS;
+
+function parseSettings(raw: string | null): StoredLlmSettings {
+  if (!raw) return DEFAULT_LLM_SETTINGS;
   try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (!raw) return { ...DEFAULT_LLM_SETTINGS };
     const parsed = JSON.parse(raw) as Partial<StoredLlmSettings>;
     return {
       provider: parsed.provider === "ollama" ? "ollama" : "openai",
@@ -34,13 +36,31 @@ export function loadLlmSettings(): StoredLlmSettings {
       apiKey: typeof parsed.apiKey === "string" ? parsed.apiKey : "",
     };
   } catch {
-    return { ...DEFAULT_LLM_SETTINGS };
+    return DEFAULT_LLM_SETTINGS;
   }
+}
+
+export function loadLlmSettings(): StoredLlmSettings {
+  if (typeof window === "undefined") return DEFAULT_LLM_SETTINGS;
+  return getLlmSettingsSnapshot();
+}
+
+/** Stable snapshot for useSyncExternalStore (same ref until localStorage changes). */
+export function getLlmSettingsSnapshot(): StoredLlmSettings {
+  if (typeof window === "undefined") return DEFAULT_LLM_SETTINGS;
+  const raw = window.localStorage.getItem(STORAGE_KEY);
+  if (raw === cachedRaw) return cachedSettings;
+  cachedRaw = raw;
+  cachedSettings = parseSettings(raw);
+  return cachedSettings;
 }
 
 export function saveLlmSettings(settings: StoredLlmSettings): void {
   if (typeof window === "undefined") return;
-  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
+  const raw = JSON.stringify(settings);
+  window.localStorage.setItem(STORAGE_KEY, raw);
+  cachedRaw = raw;
+  cachedSettings = settings;
 }
 
 export function providerDefaults(provider: LlmProvider): Pick<StoredLlmSettings, "model" | "baseUrl"> {

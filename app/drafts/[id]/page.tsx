@@ -124,14 +124,7 @@ export default async function DraftRoomPage({ params }: PageProps<"/drafts/[id]"
         </CardContent>
       </Card>
 
-      <Card className="mt-4">
-        <CardHeader>
-          <CardTitle>Draft agent</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <DraftAgentSection draftId={id} />
-        </CardContent>
-      </Card>
+      <DraftAgentSection draftId={id} />
     </div>
   );
 }

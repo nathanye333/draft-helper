@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import {
   DEFAULT_LLM_SETTINGS,
-  loadLlmSettings,
+  getLlmSettingsSnapshot,
   providerDefaults,
   saveLlmSettings,
   type StoredLlmSettings,
@@ -31,10 +31,6 @@ function subscribeLlmSettings(onStoreChange: () => void) {
     window.removeEventListener(LLM_SETTINGS_EVENT, handler);
     window.removeEventListener("storage", handler);
   };
-}
-
-function getLlmSettingsSnapshot(): StoredLlmSettings {
-  return loadLlmSettings();
 }
 
 function persistSettings(settings: StoredLlmSettings) {
@@ -126,11 +122,9 @@ export function ChatPanel({ draftId }: { draftId: string }) {
   }
 
   return (
-    <div className="flex flex-col gap-3">
-      <div className="flex items-center justify-between gap-2">
-        <p className="text-xs text-slate-500">
-          BYOK draft analyst · settings stay in this browser
-        </p>
+    <div className="flex h-full min-h-0 flex-col gap-3">
+      <div className="flex shrink-0 items-center justify-between gap-2">
+        <p className="text-xs text-slate-500">BYOK · settings stay in this browser</p>
         <Button
           type="button"
           variant="ghost"
@@ -142,7 +136,7 @@ export function ChatPanel({ draftId }: { draftId: string }) {
       </div>
 
       {settingsOpen ? (
-        <div className="grid gap-3 rounded-lg border border-slate-800 bg-slate-950/50 p-3 sm:grid-cols-2">
+        <div className="grid shrink-0 gap-3 rounded-lg border border-slate-800 bg-slate-950/50 p-3">
           <div className="space-y-1.5">
             <Label htmlFor="llm-provider">Provider</Label>
             <Select
@@ -189,7 +183,7 @@ export function ChatPanel({ draftId }: { draftId: string }) {
               placeholder={settings.provider === "ollama" ? "Usually blank" : "sk-…"}
             />
           </div>
-          <p className="text-xs text-slate-500 sm:col-span-2">
+          <p className="text-xs text-slate-500">
             Ollama only works when this Next.js server can reach your machine (local{" "}
             <code className="text-slate-400">next dev</code>). Use a tool-calling model such as
             llama3.1.
@@ -197,7 +191,7 @@ export function ChatPanel({ draftId }: { draftId: string }) {
         </div>
       ) : null}
 
-      <div className="flex max-h-80 min-h-40 flex-col gap-3 overflow-y-auto rounded-lg border border-slate-800 bg-slate-950/40 p-3">
+      <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto rounded-lg border border-slate-800 bg-slate-950/40 p-3">
         {messages.length === 0 ? (
           <p className="text-sm text-slate-500">
             Ask about top available RBs by projPoints, ADP−ECR value plays, or bye-week clusters.
@@ -206,7 +200,7 @@ export function ChatPanel({ draftId }: { draftId: string }) {
           messages.map((m, i) => (
             <div
               key={`${m.role}-${i}`}
-              className={m.role === "user" ? "ml-6 text-right" : "mr-6 text-left"}
+              className={m.role === "user" ? "ml-4 text-right" : "mr-4 text-left"}
             >
               <div
                 className={
@@ -233,10 +227,10 @@ export function ChatPanel({ draftId }: { draftId: string }) {
         <div ref={bottomRef} />
       </div>
 
-      {error ? <p className="text-sm text-red-400">{error}</p> : null}
+      {error ? <p className="shrink-0 text-sm text-red-400">{error}</p> : null}
 
       <form
-        className="flex gap-2"
+        className="flex shrink-0 gap-2"
         onSubmit={(e) => {
           e.preventDefault();
           void send();
