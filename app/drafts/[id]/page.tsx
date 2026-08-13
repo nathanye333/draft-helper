@@ -8,6 +8,7 @@ import { PickFeed } from "@/components/draft-room/pick-feed";
 import { MyRoster } from "@/components/draft-room/my-roster";
 import { RecommendationsPanel } from "@/components/draft-room/recommendations-panel";
 import { UndoButton } from "@/components/draft-room/undo-button";
+import { DraftAgentSection } from "@/components/draft-room/draft-agent-section";
 import { ClientIslandErrorBoundary } from "@/components/draft-room/client-island-error-boundary";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
@@ -120,6 +121,15 @@ export default async function DraftRoomPage({ params }: PageProps<"/drafts/[id]"
           <ClientIslandErrorBoundary name="Recommendations">
             <RecommendationsPanel recommendations={recommendations} />
           </ClientIslandErrorBoundary>
+        </CardContent>
+      </Card>
+
+      <Card className="mt-4">
+        <CardHeader>
+          <CardTitle>Draft agent</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <DraftAgentSection draftId={id} />
         </CardContent>
       </Card>
     </div>
