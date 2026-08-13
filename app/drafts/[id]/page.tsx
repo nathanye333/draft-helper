@@ -2,14 +2,13 @@ import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { fetchDraftBundle } from "@/lib/draft/data";
 import { computeDraftState, toAvailablePlayerVMs, toPickFeedVMs, computeRosterForTeam } from "@/lib/draft/view";
-import { computeRecommendations } from "@/lib/analytics/recommendations";
+import { computeRecommendations, toRecommendationVMs } from "@/lib/analytics/recommendations";
 import { PlayerSearch } from "@/components/draft-room/player-search";
 import { PickFeed } from "@/components/draft-room/pick-feed";
 import { MyRoster } from "@/components/draft-room/my-roster";
 import { RecommendationsPanel } from "@/components/draft-room/recommendations-panel";
-import { toRecommendationVMs } from "@/lib/draft/recommendation-vm";
-import { DraftAgentSection } from "@/components/draft-room/draft-agent-section";
 import { UndoButton } from "@/components/draft-room/undo-button";
+import { ClientIslandErrorBoundary } from "@/components/draft-room/client-island-error-boundary";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
 export default async function DraftRoomPage({ params }: PageProps<"/drafts/[id]">) {
@@ -65,7 +64,9 @@ export default async function DraftRoomPage({ params }: PageProps<"/drafts/[id]"
           <Link href={`/drafts/${id}/analysis`} className="text-sm text-slate-300 hover:text-slate-100">
             Analysis
           </Link>
-          <UndoButton draftId={id} disabled={bundle.picks.length === 0} />
+          <ClientIslandErrorBoundary name="Undo">
+            <UndoButton draftId={id} disabled={bundle.picks.length === 0} />
+          </ClientIslandErrorBoundary>
         </div>
       </div>
 
@@ -75,12 +76,14 @@ export default async function DraftRoomPage({ params }: PageProps<"/drafts/[id]"
             <CardTitle>Player search</CardTitle>
           </CardHeader>
           <CardContent>
-            <PlayerSearch
-              draftId={id}
-              availablePlayers={availablePlayers}
-              teams={bundle.teams}
-              defaultTeamId={state.onClockTeam?.id ?? null}
-            />
+            <ClientIslandErrorBoundary name="Player search">
+              <PlayerSearch
+                draftId={id}
+                availablePlayers={availablePlayers}
+                teams={bundle.teams}
+                defaultTeamId={state.onClockTeam?.id ?? null}
+              />
+            </ClientIslandErrorBoundary>
           </CardContent>
         </Card>
 
@@ -89,7 +92,9 @@ export default async function DraftRoomPage({ params }: PageProps<"/drafts/[id]"
             <CardTitle>Recent picks</CardTitle>
           </CardHeader>
           <CardContent>
-            <PickFeed picks={pickFeed} />
+            <ClientIslandErrorBoundary name="Recent picks">
+              <PickFeed picks={pickFeed} />
+            </ClientIslandErrorBoundary>
           </CardContent>
         </Card>
 
@@ -112,16 +117,9 @@ export default async function DraftRoomPage({ params }: PageProps<"/drafts/[id]"
           <CardTitle>Recommendations</CardTitle>
         </CardHeader>
         <CardContent>
-          <RecommendationsPanel recommendations={recommendations} />
-        </CardContent>
-      </Card>
-
-      <Card className="mt-4">
-        <CardHeader>
-          <CardTitle>Draft agent</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <DraftAgentSection draftId={id} />
+          <ClientIslandErrorBoundary name="Recommendations">
+            <RecommendationsPanel recommendations={recommendations} />
+          </ClientIslandErrorBoundary>
         </CardContent>
       </Card>
     </div>

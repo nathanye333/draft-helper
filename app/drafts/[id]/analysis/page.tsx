@@ -7,7 +7,7 @@ import { computeRecommendations } from "@/lib/analytics/recommendations";
 import { ValueLabelBadge } from "@/components/value-label-badge";
 import { ScarcityAlerts } from "@/components/analysis/scarcity-alerts";
 import { RecommendationsPanel } from "@/components/draft-room/recommendations-panel";
-import { toRecommendationVMs } from "@/lib/draft/recommendation-vm";
+import { toRecommendationVMs } from "@/lib/analytics/recommendations";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import type { Position } from "@/lib/supabase/types";
 import type { PickWithDetails } from "@/lib/draft/data";
