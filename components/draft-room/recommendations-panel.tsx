@@ -1,8 +1,6 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import type { Recommendation } from "@/lib/analytics/recommendations";
-import type { Position } from "@/lib/supabase/types";
 import {
   DEFAULT_BOARD_FILTERS,
   matchesBoardFilters,
@@ -10,12 +8,9 @@ import {
   useBoardFilterOptions,
   type BoardFilterState,
 } from "@/components/draft-room/player-board-filters";
+import type { RecommendationVM } from "@/lib/draft/recommendation-vm";
 
-export interface RecommendationVM extends Recommendation {
-  byeWeek: number | null;
-  nflTeam: string | null;
-  rankAdp: number | null;
-}
+export type { RecommendationVM } from "@/lib/draft/recommendation-vm";
 
 export function RecommendationsPanel({ recommendations }: { recommendations: RecommendationVM[] }) {
   const [filters, setFilters] = useState<BoardFilterState>(DEFAULT_BOARD_FILTERS);
@@ -61,27 +56,4 @@ export function RecommendationsPanel({ recommendations }: { recommendations: Rec
       )}
     </div>
   );
-}
-
-/** Enrich scored recommendations with board metadata for filtering/display. */
-export function toRecommendationVMs(
-  recommendations: Recommendation[],
-  availablePlayers: Array<{
-    fpPlayerId: string;
-    position: Position;
-    byeWeek: number | null;
-    nflTeam: string | null;
-    rankAdp: number | null;
-  }>,
-): RecommendationVM[] {
-  const byId = new Map(availablePlayers.map((p) => [p.fpPlayerId, p]));
-  return recommendations.map((rec) => {
-    const meta = byId.get(rec.fpPlayerId);
-    return {
-      ...rec,
-      byeWeek: meta?.byeWeek ?? null,
-      nflTeam: meta?.nflTeam ?? null,
-      rankAdp: meta?.rankAdp ?? null,
-    };
-  });
 }
