@@ -314,19 +314,19 @@ export function createDraftTools(draftId: string) {
 
   const web_search = tool(
     async (input) => {
-      const { query, results } = await webSearch(input.query, {
+      const result = await webSearch(input.query, {
         maxResults: input.maxResults ?? 5,
       });
-      return json({ query, results });
+      return json(result);
     },
     {
       name: "web_search",
       description:
-        "Search the web for news, injuries, or context outside the draft DB. Use one short plain query (no stacked quotes). Prefer draft DB tools for ADP/ECR/projections.",
+        "Search recent news/injuries/context (news RSS or Brave if configured). Use one short plain query (no stacked quotes). Prefer draft DB tools for ADP/ECR/projections.",
       schema: z.object({
         query: z
           .string()
-          .describe("Short plain search query, e.g. '2026 NFL draft WR prospects'"),
+          .describe("Short plain search query, e.g. 'NFL injury Nabers'"),
         maxResults: z.number().int().min(1).max(8).optional().default(5),
       }),
     },
