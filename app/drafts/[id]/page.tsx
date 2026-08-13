@@ -39,7 +39,7 @@ export default async function DraftRoomPage({ params }: PageProps<"/drafts/[id]"
           userAssignedSlots: bundle.picks
             .filter((p) => p.team_id === state.userTeam!.id)
             .map((p) => p.assigned_slot_type),
-          limit: 25,
+          limit: 80,
         }),
         availablePlayers,
       )

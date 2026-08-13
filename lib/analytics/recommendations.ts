@@ -4,8 +4,11 @@ import type { Position, RosterSlot, SlotType } from "@/lib/supabase/types";
 
 const FLEX_ELIGIBLE: Position[] = ["RB", "WR", "TE"];
 const TOP_TIER_SIZE = 12;
-/** How many rounds ahead of the current pick we still consider "on the board". */
-const BOARD_WINDOW_ROUNDS = 3;
+/** Hard ceiling so UDFA/projection filler never enters the pool. */
+const ABSOLUTE_MAX_BOARD_RANK = 200;
+/** Prefer at least this many recommendations per position (for filters). */
+const MIN_PER_POSITION = 8;
+const ALL_POSITIONS: Position[] = ["QB", "RB", "WR", "TE", "K", "DST"];
 /** Cap on fallen-ADP bonus so steals help but don't drown out rank quality. */
 const MAX_VALUE_BONUS = 25;
 
@@ -96,8 +99,8 @@ function boardRank(c: RecommendationCandidate): number | null {
  *   position_need = empty_starter_slots[pos] / total_starter_slots
  *   scarcity      = top_N_remaining_at_position / picks_until_next_user_pick
  *
- * Candidates without ADP/ECR, or with ADP far beyond the current board window,
- * are excluded so projection-only deep sleepers cannot outrank real draft targets.
+ * Candidates without ADP/ECR are excluded. Results include top overall BPA plus
+ * depth at each position so position filters (e.g. QB) are not empty.
  */
 export function computeRecommendations({
   candidates,
@@ -110,7 +113,11 @@ export function computeRecommendations({
 }: ComputeRecommendationsParams): Recommendation[] {
   const totalStarters = totalStarterSlots(rosterSlots);
   const untilNextTurn = picksUntilNextTurn(currentPickNumber, numTeams, userDraftPosition);
-  const boardCeiling = currentPickNumber + numTeams * BOARD_WINDOW_ROUNDS;
+  // Keep mid-round QBs/TEs visible early; still cut true end-of-board noise.
+  const boardCeiling = Math.max(
+    ABSOLUTE_MAX_BOARD_RANK,
+    currentPickNumber + numTeams * 12,
+  );
 
   const remainingCountByPosition = new Map<Position, number>();
   for (const c of candidates) {
@@ -122,7 +129,6 @@ export function computeRecommendations({
   const scored = candidates.flatMap((c) => {
     const rank = boardRank(c);
     if (rank == null) return [];
-    // Keep recommendations near the live board — not UDFA/projection filler.
     if (rank > boardCeiling) return [];
 
     const rawDelta = computeAdpDelta(currentPickNumber, c.rankAdp);
@@ -134,7 +140,6 @@ export function computeRecommendations({
     const topRemaining = remainingCountByPosition.get(c.position) ?? 0;
     const scarcity = topRemaining / untilNextTurn;
 
-    // Quality dominates: ADP 1 ≈ -1, ADP 30 ≈ -30. Need/scarcity are tie-breakers.
     const quality = -rank;
     const score = quality + valueBonus * 0.5 + positionNeed * 8 + scarcity * 4;
 
@@ -149,7 +154,41 @@ export function computeRecommendations({
     ];
   });
 
-  return scored.sort((a, b) => b.score - a.score).slice(0, limit);
+  const sorted = scored.sort((a, b) => b.score - a.score);
+  if (sorted.length <= limit) return sorted;
+
+  // Mix top overall BPA with per-position depth so QB/TE/etc. aren't missing
+  // when the UI filters the recommendation list by position.
+  const selected: Recommendation[] = [];
+  const seen = new Set<string>();
+
+  const overallCap = Math.min(limit, Math.max(20, Math.floor(limit * 0.5)));
+  for (const rec of sorted) {
+    if (selected.length >= overallCap) break;
+    selected.push(rec);
+    seen.add(rec.fpPlayerId);
+  }
+
+  for (const position of ALL_POSITIONS) {
+    let have = selected.filter((r) => r.position === position).length;
+    for (const rec of sorted) {
+      if (have >= MIN_PER_POSITION) break;
+      if (rec.position !== position || seen.has(rec.fpPlayerId)) continue;
+      selected.push(rec);
+      seen.add(rec.fpPlayerId);
+      have += 1;
+    }
+  }
+
+  // Fill remaining slots with next-best overall.
+  for (const rec of sorted) {
+    if (selected.length >= limit) break;
+    if (seen.has(rec.fpPlayerId)) continue;
+    selected.push(rec);
+    seen.add(rec.fpPlayerId);
+  }
+
+  return selected.sort((a, b) => b.score - a.score).slice(0, limit);
 }
 
 function buildRationale(

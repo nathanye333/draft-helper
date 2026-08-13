@@ -96,7 +96,7 @@ describe("computeRecommendations", () => {
     }
   });
 
-  it("boosts a player who has fallen past ADP within the board window", () => {
+  it("boosts a player who has fallen past ADP", () => {
     const result = computeRecommendations({
       candidates: [
         { fpPlayerId: "fair", name: "On-ADP WR", position: "WR", rankAdp: 20, rankEcr: 22 },
@@ -112,5 +112,28 @@ describe("computeRecommendations", () => {
 
     expect(result[0].fpPlayerId).toBe("steal");
     expect(result[0].rationale).toContain("value");
+  });
+
+  it("includes multiple QBs so position filters are not empty early", () => {
+    const result = computeRecommendations({
+      candidates: [
+        { fpPlayerId: "rb1", name: "RB1", position: "RB", rankAdp: 1, rankEcr: 1 },
+        { fpPlayerId: "wr1", name: "WR1", position: "WR", rankAdp: 2, rankEcr: 2 },
+        { fpPlayerId: "qb1", name: "Josh Allen", position: "QB", rankAdp: 25, rankEcr: 30 },
+        { fpPlayerId: "qb2", name: "Lamar Jackson", position: "QB", rankAdp: 35, rankEcr: 40 },
+        { fpPlayerId: "qb3", name: "Jalen Hurts", position: "QB", rankAdp: 42, rankEcr: 45 },
+        { fpPlayerId: "qb4", name: "Joe Burrow", position: "QB", rankAdp: 48, rankEcr: 50 },
+      ],
+      currentPickNumber: 5,
+      numTeams: 10,
+      userDraftPosition: 5,
+      rosterSlots: DEFAULT_ROSTER_SLOTS,
+      userAssignedSlots: [],
+      limit: 20,
+    });
+
+    const qbs = result.filter((r) => r.position === "QB");
+    expect(qbs.length).toBeGreaterThanOrEqual(3);
+    expect(qbs.map((q) => q.fpPlayerId)).toContain("qb2");
   });
 });
