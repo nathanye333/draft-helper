@@ -113,6 +113,8 @@ export async function POST(
 
       send({ type: "session", sessionId: resolvedSessionId });
 
+      let pendingDone: Extract<DraftAgentStreamEvent, { type: "done" }> | null = null;
+
       try {
         for await (const event of streamDraftChatAgent({
           draftId,
@@ -147,6 +149,11 @@ export async function POST(
             });
           } else if (event.type === "done") {
             stopped = Boolean(event.stopped);
+            pendingDone = event;
+            continue;
+          } else if (event.type === "error") {
+            send(event);
+            continue;
           }
 
           send(event);
@@ -158,20 +165,24 @@ export async function POST(
           assistantContent.trim() ||
           (stopped ? "Stopped." : assistantReasoning.trim() ? "" : "No response from the model.");
 
-        await appendChatTurn(supabase, resolvedSessionId, {
-          userContent: userTurn.content,
-          assistant: {
-            content: finalContent,
-            reasoning: assistantReasoning.trim() || undefined,
-            toolCalls: [...toolCalls.values()],
-            stopped,
-          },
-        }).catch((persistErr) => {
+        try {
+          await appendChatTurn(supabase, resolvedSessionId, {
+            userContent: userTurn.content,
+            assistant: {
+              content: finalContent,
+              reasoning: assistantReasoning.trim() || undefined,
+              toolCalls: [...toolCalls.values()],
+              stopped,
+            },
+          });
+        } catch (persistErr) {
           console.error(
             "[draft-agent] failed to persist chat turn:",
             persistErr instanceof Error ? persistErr.message : persistErr,
           );
-        });
+        }
+
+        send(pendingDone ?? { type: "done", stopped });
       } catch (err) {
         const message = err instanceof Error ? err.message : "Agent failed";
         console.error("[draft-agent] route stream error:", message);

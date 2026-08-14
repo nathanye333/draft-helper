@@ -58,6 +58,15 @@ export function titleFromFirstMessage(content: string): string {
   return oneLine.length > 60 ? `${oneLine.slice(0, 57)}…` : oneLine;
 }
 
+export function isDefaultSessionTitle(title: string): boolean {
+  const trimmed = title.trim();
+  return trimmed === "New chat" || /^Chat \d+$/.test(trimmed);
+}
+
+export function numberedSessionTitle(existingCount: number): string {
+  return `Chat ${Math.max(1, existingCount + 1)}`;
+}
+
 function mapSession(row: SessionRow, messageCount = 0): ChatSessionSummary {
   return {
     id: row.id,
@@ -108,12 +117,22 @@ export async function createChatSession(
   supabase: SupabaseClient,
   params: { draftId: string; userId: string; title?: string },
 ): Promise<ChatSessionSummary> {
+  let title = params.title?.trim();
+  if (!title) {
+    const { count, error: countError } = await supabase
+      .from("draft_agent_sessions")
+      .select("id", { count: "exact", head: true })
+      .eq("draft_id", params.draftId);
+    if (countError) throw new Error(countError.message);
+    title = numberedSessionTitle(count ?? 0);
+  }
+
   const { data, error } = await supabase
     .from("draft_agent_sessions")
     .insert({
       draft_id: params.draftId,
       user_id: params.userId,
-      title: params.title?.trim() || "New chat",
+      title,
     })
     .select("id, draft_id, title, created_at, updated_at")
     .single();
@@ -197,6 +216,9 @@ export async function appendChatTurn(
       session_id: sessionId,
       role: "user" as const,
       content: turn.userContent,
+      reasoning: null,
+      tool_calls: null,
+      stopped: false,
       sort_order: baseOrder,
     },
     {
@@ -216,7 +238,7 @@ export async function appendChatTurn(
   const patch: { updated_at: string; title?: string } = {
     updated_at: new Date().toISOString(),
   };
-  if (session.title === "New chat" && turn.userContent.trim()) {
+  if (isDefaultSessionTitle(session.title) && turn.userContent.trim()) {
     patch.title = titleFromFirstMessage(turn.userContent);
   }
 

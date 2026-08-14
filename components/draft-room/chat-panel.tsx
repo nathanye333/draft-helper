@@ -672,7 +672,7 @@ export function ChatPanel({ draftId }: { draftId: string }) {
   }
 
   const activeSessionTitle =
-    sessions.find((s) => s.id === activeSessionId)?.title ?? "New chat";
+    sessions.find((s) => s.id === activeSessionId)?.title ?? "Chat";
 
   return (
     <div className="flex h-full min-h-0 flex-col">
