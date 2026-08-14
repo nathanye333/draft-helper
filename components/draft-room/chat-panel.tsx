@@ -33,6 +33,22 @@ interface ChatMessage {
   stopped?: boolean;
 }
 
+interface SessionSummary {
+  id: string;
+  title: string;
+  updatedAt: string;
+  messageCount: number;
+}
+
+interface StoredMessagePayload {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  reasoning?: string | null;
+  toolCalls?: ToolCallVM[] | null;
+  stopped?: boolean;
+}
+
 const LLM_SETTINGS_EVENT = "draft-helper-llm-settings";
 
 function subscribeLlmSettings(onStoreChange: () => void) {
@@ -53,6 +69,30 @@ function persistSettings(settings: StoredLlmSettings) {
 
 function newId() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+}
+
+function formatSessionWhen(iso: string): string {
+  const d = new Date(iso);
+  const now = new Date();
+  const sameDay =
+    d.getFullYear() === now.getFullYear() &&
+    d.getMonth() === now.getMonth() &&
+    d.getDate() === now.getDate();
+  if (sameDay) {
+    return d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  }
+  return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+function storedToChatMessage(m: StoredMessagePayload): ChatMessage {
+  return {
+    id: m.id,
+    role: m.role,
+    content: m.content,
+    reasoning: m.reasoning ?? undefined,
+    toolCalls: m.toolCalls ?? undefined,
+    stopped: m.stopped,
+  };
 }
 
 function ThinkingBlock({
@@ -142,6 +182,10 @@ export function ChatPanel({ draftId }: { draftId: string }) {
     () => DEFAULT_LLM_SETTINGS,
   );
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [sessionsOpen, setSessionsOpen] = useState(false);
+  const [sessions, setSessions] = useState<SessionSummary[]>([]);
+  const [sessionsLoading, setSessionsLoading] = useState(true);
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
@@ -157,10 +201,126 @@ export function ChatPanel({ draftId }: { draftId: string }) {
   const scanSeq = useRef(0);
   const abortRef = useRef<AbortController | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const sessionsMenuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, busy]);
+
+  useEffect(() => {
+    if (!sessionsOpen) return;
+    const onDocClick = (e: MouseEvent) => {
+      if (!sessionsMenuRef.current?.contains(e.target as Node)) {
+        setSessionsOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", onDocClick);
+    return () => document.removeEventListener("mousedown", onDocClick);
+  }, [sessionsOpen]);
+
+  async function refreshSessionsList() {
+    try {
+      const res = await fetch(`/api/drafts/${draftId}/chat/sessions`);
+      const data = (await res.json()) as {
+        ok?: boolean;
+        sessions?: SessionSummary[];
+      };
+      if (res.ok && data.ok && data.sessions) {
+        setSessions(data.sessions);
+      }
+    } catch {
+      // keep existing list
+    }
+  }
+
+  async function refreshSessions(preferSessionId?: string | null) {
+    setSessionsLoading(true);
+    try {
+      const res = await fetch(`/api/drafts/${draftId}/chat/sessions`);
+      const data = (await res.json()) as {
+        ok?: boolean;
+        sessions?: SessionSummary[];
+      };
+      if (!res.ok || !data.ok || !data.sessions) {
+        throw new Error("Failed to load chat sessions");
+      }
+      setSessions(data.sessions);
+
+      const targetId =
+        preferSessionId ??
+        activeSessionId ??
+        (data.sessions.length > 0 ? data.sessions[0]!.id : null);
+
+      if (targetId && targetId !== activeSessionId) {
+        await loadSession(targetId, data.sessions);
+      } else if (!targetId) {
+        setActiveSessionId(null);
+        setMessages([]);
+      }
+    } catch {
+      setSessions([]);
+    } finally {
+      setSessionsLoading(false);
+    }
+  }
+
+  async function loadSession(sessionId: string, knownSessions?: SessionSummary[]) {
+    const res = await fetch(`/api/drafts/${draftId}/chat/sessions/${sessionId}`);
+    const data = (await res.json()) as {
+      ok?: boolean;
+      session?: {
+        id: string;
+        title: string;
+        updatedAt: string;
+        messageCount: number;
+        messages: StoredMessagePayload[];
+      };
+    };
+    if (!res.ok || !data.ok || !data.session) {
+      throw new Error("Failed to load chat session");
+    }
+
+    setActiveSessionId(data.session.id);
+    setMessages(data.session.messages.map(storedToChatMessage));
+    setError(null);
+    setSessionsOpen(false);
+
+    const summary: SessionSummary = {
+      id: data.session.id,
+      title: data.session.title,
+      updatedAt: data.session.updatedAt,
+      messageCount: data.session.messageCount,
+    };
+    setSessions((prev) => {
+      const base = knownSessions ?? prev;
+      const without = base.filter((s) => s.id !== summary.id);
+      return [summary, ...without];
+    });
+  }
+
+  async function startNewChat() {
+    if (busy) return;
+    const res = await fetch(`/api/drafts/${draftId}/chat/sessions`, { method: "POST" });
+    const data = (await res.json()) as {
+      ok?: boolean;
+      session?: SessionSummary;
+    };
+    if (!res.ok || !data.ok || !data.session) {
+      setError("Could not start a new chat");
+      return;
+    }
+    setActiveSessionId(data.session.id);
+    setMessages([]);
+    setError(null);
+    setSessionsOpen(false);
+    setSessions((prev) => [data.session!, ...prev.filter((s) => s.id !== data.session!.id)]);
+    textareaRef.current?.focus();
+  }
+
+  useEffect(() => {
+    void refreshSessions();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- load once per draft
+  }, [draftId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -349,6 +509,7 @@ export function ChatPanel({ draftId }: { draftId: string }) {
         signal: ac.signal,
         body: JSON.stringify({
           messages: historyForApi,
+          sessionId: activeSessionId ?? undefined,
           provider: settings.provider,
           model: settings.model,
           baseUrl: settings.baseUrl || undefined,
@@ -382,7 +543,9 @@ export function ChatPanel({ draftId }: { draftId: string }) {
             continue;
           }
 
-          if (event.type === "reasoning") {
+          if (event.type === "session") {
+            setActiveSessionId(event.sessionId);
+          } else if (event.type === "reasoning") {
             const delta = event.delta;
             patchAssistant(assistantId, (m) => ({
               ...m,
@@ -503,27 +666,87 @@ export function ChatPanel({ draftId }: { draftId: string }) {
     } finally {
       abortRef.current = null;
       setBusy(false);
+      void refreshSessionsList();
       textareaRef.current?.focus();
     }
   }
 
+  const activeSessionTitle =
+    sessions.find((s) => s.id === activeSessionId)?.title ?? "New chat";
+
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex shrink-0 items-center justify-between gap-2 border-b border-slate-800/80 pb-2">
+      <div className="flex shrink-0 flex-col gap-2 border-b border-slate-800/80 pb-2">
+        <div className="flex items-center justify-between gap-2">
+          <div className="relative min-w-0 flex-1" ref={sessionsMenuRef}>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="h-8 max-w-full justify-start truncate px-2 font-normal text-slate-200"
+              disabled={busy || sessionsLoading}
+              onClick={() => setSessionsOpen((o) => !o)}
+            >
+              {sessionsLoading ? "Loading chats…" : activeSessionTitle}
+            </Button>
+            {sessionsOpen ? (
+              <div className="absolute left-0 top-full z-20 mt-1 max-h-64 w-72 overflow-y-auto rounded-lg border border-slate-700 bg-slate-900 py-1 shadow-xl">
+                {sessions.length === 0 ? (
+                  <p className="px-3 py-2 text-xs text-slate-500">No previous chats</p>
+                ) : (
+                  sessions.map((s) => (
+                    <button
+                      key={s.id}
+                      type="button"
+                      disabled={busy}
+                      className={`flex w-full flex-col items-start gap-0.5 px-3 py-2 text-left text-sm hover:bg-slate-800/80 disabled:opacity-50 ${
+                        s.id === activeSessionId ? "bg-slate-800/60 text-emerald-300" : "text-slate-200"
+                      }`}
+                      onClick={() => {
+                        if (s.id === activeSessionId) {
+                          setSessionsOpen(false);
+                          return;
+                        }
+                        void loadSession(s.id).catch(() => setError("Could not load chat"));
+                      }}
+                    >
+                      <span className="line-clamp-1 w-full font-medium">{s.title}</span>
+                      <span className="text-[10px] text-slate-500">
+                        {formatSessionWhen(s.updatedAt)}
+                        {s.messageCount > 0 ? ` · ${s.messageCount} msgs` : ""}
+                      </span>
+                    </button>
+                  ))
+                )}
+              </div>
+            ) : null}
+          </div>
+          <div className="flex shrink-0 items-center gap-1">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              disabled={busy}
+              onClick={() => void startNewChat()}
+            >
+              New chat
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => setSettingsOpen((o) => !o)}
+            >
+              {settingsOpen ? "Hide" : "Settings"}
+            </Button>
+          </div>
+        </div>
         <p className="truncate text-[11px] text-slate-500">
           {settings.model}
           {settings.provider === "openai" && hasServerOpenAiKey && !settings.apiKey.trim()
             ? " · account key"
             : ""}
         </p>
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          onClick={() => setSettingsOpen((o) => !o)}
-        >
-          {settingsOpen ? "Hide" : "Settings"}
-        </Button>
       </div>
 
       {settingsOpen ? (
@@ -627,6 +850,10 @@ export function ChatPanel({ draftId }: { draftId: string }) {
           <div className="flex flex-1 flex-col justify-center gap-2 px-1 text-sm text-slate-500">
             <p className="font-medium text-slate-300">Draft agent</p>
             <p>Ask about available RBs, ADP value, bye clusters, or roster needs.</p>
+            <p className="text-xs">
+              Use <span className="text-slate-400">New chat</span> for a fresh thread, or open a
+              previous chat from the menu above.
+            </p>
           </div>
         ) : (
           messages.map((m) => (
