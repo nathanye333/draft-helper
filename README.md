@@ -26,8 +26,8 @@ Vercel + Supabase Cloud in production.
 ```
 app/
   page.tsx                     # Dashboard: list drafts, create new
-  login/                       # Magic-link sign-in
-  auth/callback/               # Supabase auth code exchange
+  login/                       # Google OAuth (+ optional email/password)
+  auth/callback/               # Supabase auth code exchange (OAuth PKCE)
   drafts/new/                  # Setup wizard (client)
   drafts/[id]/setup/           # Rankings sync + "start draft" step
   drafts/[id]/page.tsx         # Live draft room (+ draft agent chat)
@@ -134,9 +134,10 @@ key required).
 npm run dev
 ```
 
-Visit `http://localhost:3000`, sign in with a magic link (check
-`http://localhost:54324` — the local Inbucket mail viewer — for the email
-when running fully offline), create a draft, and go.
+Visit `http://localhost:3000` and sign in with Google (or email/password).
+For local Google OAuth, set `SUPABASE_AUTH_EXTERNAL_GOOGLE_CLIENT_ID` /
+`SUPABASE_AUTH_EXTERNAL_GOOGLE_CLIENT_SECRET` (see `.env.local.example`)
+and restart Supabase so `config.toml` picks them up.
 
 ### 5. Run tests / lint
 
@@ -159,11 +160,17 @@ npm run lint
    variables from `.env.local.example` in Vercel's Project Settings →
    Environment Variables, using your Supabase Cloud project's URL/keys
    (Settings → API in the Supabase dashboard).
-4. **Enable email auth** in Supabase Auth settings (magic link is enabled by
-   default) and add your production domain to the redirect URL allow-list
-   (Authentication → URL Configuration).
+4. **Enable Google Auth** in Supabase (Authentication → Providers → Google):
+   create a Google Cloud **Web** OAuth client, set the Authorized redirect
+   URI to the callback URL shown on that provider page
+   (`https://<project-ref>.supabase.co/auth/v1/callback`), paste Client ID
+   + Secret into Supabase, and add your app origins plus
+   `https://<your-domain>/auth/callback` under Authentication → URL
+   Configuration. Email/password can stay enabled as a fallback.
 5. Deploy. Local and production run the identical schema and code path —
-   only the env vars differ.
+   only the env vars differ. The draft agent’s server `OPENAI_API_KEY`
+   fallback remains allowlisted by email in `lib/agent/server-llm.ts`
+   (including when that user signs in with Google).
 
 > This repository does not include committed Supabase/Vercel credentials.
 > To provision these for you automatically in future runs, add
