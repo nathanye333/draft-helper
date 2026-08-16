@@ -1,4 +1,9 @@
 import type { LeagueRosterEntry } from "@/lib/supabase/types";
+import {
+  averageCv,
+  summarizeConsistency,
+  type ConsistencyStats,
+} from "@/lib/analytics/consistency";
 import { positionNeedScores } from "@/lib/analytics/start-sit";
 import type { SlotType } from "@/lib/supabase/types";
 
@@ -8,6 +13,7 @@ export interface TradeSidePlayer {
   position: string;
   rosProj: number | null;
   weekProj: number | null;
+  consistency?: ConsistencyStats | null;
 }
 
 export interface TradeEvaluation {
@@ -22,6 +28,8 @@ export interface TradeEvaluation {
   yourNeedAfter: Record<string, number>;
   theirNeedBefore: Record<string, number>;
   theirNeedAfter: Record<string, number>;
+  giveAvgCv: number | null;
+  getAvgCv: number | null;
   verdict: "accept" | "lean_accept" | "fair" | "lean_reject" | "reject";
   rationale: string;
 }
@@ -84,6 +92,13 @@ export function evaluateTrade(params: {
     return sum + (yourNeedBefore[pos] - yourNeedAfter[pos]);
   }, 0);
 
+  const giveAvgCv = averageCv(
+    params.give.map((p) => p.consistency).filter((c): c is ConsistencyStats => Boolean(c)),
+  );
+  const getAvgCv = averageCv(
+    params.get.map((p) => p.consistency).filter((c): c is ConsistencyStats => Boolean(c)),
+  );
+
   let verdict: TradeEvaluation["verdict"] = "fair";
   if (rosDelta >= 15 && needImprovement >= 0) verdict = "accept";
   else if (rosDelta >= 5 || (rosDelta >= -5 && needImprovement > 0)) verdict = "lean_accept";
@@ -96,6 +111,23 @@ export function evaluateTrade(params: {
   ];
   if (needImprovement > 0) rationaleParts.push("Trade improves your positional depth/need.");
   if (needImprovement < 0) rationaleParts.push("Trade worsens your positional balance.");
+
+  const giveCons = params.give
+    .filter((p) => p.consistency && p.consistency.games > 0)
+    .map((p) => summarizeConsistency(p.name, p.consistency!));
+  const getCons = params.get
+    .filter((p) => p.consistency && p.consistency.games > 0)
+    .map((p) => summarizeConsistency(p.name, p.consistency!));
+  if (giveCons.length > 0) rationaleParts.push(`Giving consistency — ${giveCons.join("; ")}.`);
+  if (getCons.length > 0) rationaleParts.push(`Getting consistency — ${getCons.join("; ")}.`);
+  if (giveAvgCv != null && getAvgCv != null) {
+    if (getAvgCv + 0.08 < giveAvgCv) {
+      rationaleParts.push("Incoming side looks steadier (lower weekly variance).");
+    } else if (getAvgCv > giveAvgCv + 0.08) {
+      rationaleParts.push("Incoming side looks more volatile week-to-week.");
+    }
+  }
+
   rationaleParts.push(`Verdict: ${verdict.replace("_", " ")}.`);
 
   return {
@@ -110,6 +142,8 @@ export function evaluateTrade(params: {
     yourNeedAfter,
     theirNeedBefore,
     theirNeedAfter,
+    giveAvgCv,
+    getAvgCv,
     verdict,
     rationale: rationaleParts.join(" "),
   };

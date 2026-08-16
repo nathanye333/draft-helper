@@ -3,6 +3,8 @@ import { z } from "zod";
 import { createPlayerBoardTools } from "@/lib/agent/player-board-tools";
 import { buildSeasonPlayerRows } from "@/lib/agent/player-query";
 import { fetchFreeAgents, fetchLeagueBundle, rosterSlotsFromLeague, userTeam } from "@/lib/league/data";
+import { fetchConsistencyByEspnIds } from "@/lib/league/consistency-data";
+import { summarizeConsistency } from "@/lib/analytics/consistency";
 import { suggestStartSit } from "@/lib/analytics/start-sit";
 import { evaluateTrade } from "@/lib/analytics/trade";
 import { rankWaiverTargets } from "@/lib/analytics/waivers";
@@ -218,11 +220,59 @@ export function createLeagueTools(
             : opp.home_espn_team_id;
         opponentName = bundle.teams.find((t) => t.espn_team_id === oppId)?.name ?? null;
       }
-      return json({ week: bundle.league.current_week, opponentName, ...suggestion });
+
+      const focusIds = [
+        ...suggestion.starters.map((p) => p.espnPlayerId),
+        ...suggestion.bench.slice(0, 6).map((p) => p.espnPlayerId),
+      ];
+      const consistencyById = await fetchConsistencyByEspnIds({
+        leagueId,
+        season: bundle.league.season,
+        espnPlayerIds: focusIds,
+      });
+      const notes = [...suggestion.notes];
+      for (const p of suggestion.starters) {
+        const c = consistencyById.get(p.espnPlayerId);
+        if (!c || c.games < 3) continue;
+        if (c.label === "volatile" || c.label === "boom_bust") {
+          notes.push(
+            `${p.name} is a ${c.label.replace("_", "/")} starter (${summarizeConsistency(p.name, c)}).`,
+          );
+        }
+      }
+      for (const p of suggestion.bench.slice(0, 4)) {
+        const c = consistencyById.get(p.espnPlayerId);
+        if (!c || c.games < 3) continue;
+        if (c.label === "consistent" && (p.weekProj ?? 0) >= 8) {
+          notes.push(
+            `Bench option ${p.name} has been relatively consistent — consider if chasing boom/bust starters.`,
+          );
+        }
+      }
+
+      const withConsistency = {
+        starters: suggestion.starters.map((p) => ({
+          ...p,
+          consistency: consistencyById.get(p.espnPlayerId) ?? null,
+        })),
+        bench: suggestion.bench.map((p) => ({
+          ...p,
+          consistency: consistencyById.get(p.espnPlayerId) ?? null,
+        })),
+      };
+
+      return json({
+        week: bundle.league.current_week,
+        opponentName,
+        projectedStarterPoints: suggestion.projectedStarterPoints,
+        notes,
+        ...withConsistency,
+      });
     },
     {
       name: "suggest_start_sit",
-      description: "Recommended starters/bench from weekly projections and roster slots.",
+      description:
+        "Recommended starters/bench from weekly projections and roster slots, with ESPN weekly consistency stats attached.",
       schema: z.object({}),
     },
   );
@@ -237,6 +287,13 @@ export function createLeagueTools(
       const theirTeam = bundle.teams.find((t) => t.espn_team_id === input.theirEspnTeamId);
       if (!theirTeam) return json({ error: "Opponent team not found" });
 
+      const allIds = [...input.giveEspnPlayerIds, ...input.getEspnPlayerIds];
+      const consistencyById = await fetchConsistencyByEspnIds({
+        leagueId,
+        season: bundle.league.season,
+        espnPlayerIds: allIds,
+      });
+
       const toPlayer = (espnPlayerId: number) => {
         const row = bundle.rosterEntries.find((r) => r.espn_player_id === espnPlayerId);
         if (!row) return null;
@@ -247,6 +304,7 @@ export function createLeagueTools(
           position: row.position,
           rosProj: proj?.ros ?? null,
           weekProj: proj?.week ?? null,
+          consistency: consistencyById.get(espnPlayerId) ?? null,
         };
       };
 
@@ -270,11 +328,72 @@ export function createLeagueTools(
     {
       name: "evaluate_trade",
       description:
-        "Evaluate a trade: giveEspnPlayerIds (your players) vs getEspnPlayerIds from theirEspnTeamId.",
+        "Evaluate a trade: giveEspnPlayerIds (your players) vs getEspnPlayerIds from theirEspnTeamId. Includes ROS/week projections, need, and weekly consistency from ESPN actuals.",
       schema: z.object({
         theirEspnTeamId: z.number().int(),
         giveEspnPlayerIds: z.array(z.number().int()).min(1).max(6),
         getEspnPlayerIds: z.array(z.number().int()).min(1).max(6),
+      }),
+    },
+  );
+
+  const player_consistency = tool(
+    async (input) => {
+      const bundle = await fetchLeagueBundle(leagueId);
+      if (!bundle) return json({ error: "League not found" });
+
+      let espnIds = input.espnPlayerIds ?? [];
+      if (espnIds.length === 0 && input.names && input.names.length > 0) {
+        const found: number[] = [];
+        for (const name of input.names) {
+          const needle = name.trim().toLowerCase();
+          const row = bundle.rosterEntries.find((r) =>
+            r.player_name.toLowerCase().includes(needle),
+          );
+          if (row) found.push(row.espn_player_id);
+        }
+        espnIds = found;
+      }
+      if (espnIds.length === 0) {
+        return json({
+          error: "Provide espnPlayerIds or names that match league roster players",
+        });
+      }
+
+      const consistencyById = await fetchConsistencyByEspnIds({
+        leagueId,
+        season: bundle.league.season,
+        espnPlayerIds: espnIds,
+      });
+
+      const players = espnIds.map((id) => {
+        const row = bundle.rosterEntries.find((r) => r.espn_player_id === id);
+        const stats = consistencyById.get(id)!;
+        return {
+          espnPlayerId: id,
+          name: row?.player_name ?? `espn:${id}`,
+          position: row?.position ?? null,
+          team: row
+            ? bundle.teams.find((t) => t.espn_team_id === row.espn_team_id)?.name ?? null
+            : null,
+          season: bundle.league.season,
+          consistency: stats,
+          summary: summarizeConsistency(row?.player_name ?? `espn:${id}`, stats),
+        };
+      });
+
+      return json({
+        note: "Stats from ESPN weekly actual fantasy points (week≥1). Uses current season; pads with prior season if <3 games.",
+        players,
+      });
+    },
+    {
+      name: "player_consistency",
+      description:
+        "Weekly fantasy-point consistency (mean, σ, CV, floor/ceiling, boom/bust rates) from ESPN actuals for roster players by espnPlayerIds or name.",
+      schema: z.object({
+        espnPlayerIds: z.array(z.number().int()).min(1).max(12).optional(),
+        names: z.array(z.string()).min(1).max(12).optional(),
       }),
     },
   );
@@ -361,6 +480,7 @@ export function createLeagueTools(
     query_free_agents,
     suggest_start_sit,
     evaluate_trade,
+    player_consistency,
     waiver_targets,
     web_search,
   ];

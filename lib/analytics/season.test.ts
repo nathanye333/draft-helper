@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { computeConsistency } from "@/lib/analytics/consistency";
 import { suggestStartSit } from "@/lib/analytics/start-sit";
 import { evaluateTrade } from "@/lib/analytics/trade";
 import { rankWaiverTargets } from "@/lib/analytics/waivers";
@@ -85,6 +86,46 @@ describe("evaluateTrade", () => {
     });
     expect(result.rosDelta).toBe(40);
     expect(["accept", "lean_accept"]).toContain(result.verdict);
+  });
+
+  it("includes consistency notes when weekly stats are provided", () => {
+    const yourRoster = [
+      entry({ espn_player_id: 1, player_name: "Volatile", position: "WR", espn_team_id: 1 }),
+    ];
+    const theirRoster = [
+      entry({ espn_player_id: 2, player_name: "Steady", position: "WR", espn_team_id: 2 }),
+    ];
+    const result = evaluateTrade({
+      yourRoster,
+      theirRoster,
+      give: [
+        {
+          espnPlayerId: 1,
+          name: "Volatile",
+          position: "WR",
+          rosProj: 100,
+          weekProj: 12,
+          consistency: computeConsistency([2, 28, 3, 30, 4, 25]),
+        },
+      ],
+      get: [
+        {
+          espnPlayerId: 2,
+          name: "Steady",
+          position: "WR",
+          rosProj: 95,
+          weekProj: 11,
+          consistency: computeConsistency([11, 12, 10, 13, 12, 11]),
+        },
+      ],
+      yourEspnTeamId: 1,
+      theirEspnTeamId: 2,
+      rosterSlots: slots,
+    });
+    expect(result.rationale).toContain("consistency");
+    expect(result.getAvgCv).not.toBeNull();
+    expect(result.giveAvgCv).not.toBeNull();
+    expect(result.getAvgCv!).toBeLessThan(result.giveAvgCv!);
   });
 });
 
