@@ -143,3 +143,22 @@ export async function refreshLeagueRankings(leagueId: string) {
   if (result.ok) return result;
   return { ok: false as const, message: result.message };
 }
+
+export async function refreshLeagueNflMatchups(leagueId: string) {
+  const supabase = await createClient();
+  const { data: league } = await supabase
+    .from("leagues")
+    .select("season")
+    .eq("id", leagueId)
+    .single();
+  if (!league) return { ok: false as const, message: "League not found" };
+
+  const { syncNflMatchupData } = await import("@/lib/nflverse/matchups-sync");
+  const result = await syncNflMatchupData(league.season);
+  revalidatePath(`/leagues/${leagueId}`);
+  revalidatePath(`/leagues/${leagueId}/start-sit`);
+  revalidatePath(`/leagues/${leagueId}/waivers`);
+  revalidatePath(`/leagues/${leagueId}/trades`);
+  if (result.ok) return result;
+  return { ok: false as const, message: result.message };
+}

@@ -4,12 +4,22 @@ import { createPlayerBoardTools } from "@/lib/agent/player-board-tools";
 import { buildSeasonPlayerRows } from "@/lib/agent/player-query";
 import { fetchFreeAgents, fetchLeagueBundle, rosterSlotsFromLeague, userTeam } from "@/lib/league/data";
 import { fetchConsistencyByEspnIds } from "@/lib/league/consistency-data";
+import {
+  fetchDefenseMatchups,
+  fetchOpponentForTeam,
+  loadSeasonAnalysisRows,
+} from "@/lib/league/season-analysis-data";
+import {
+  analyzeSeasonPlayers,
+  SEASON_ANALYSIS_COLUMNS,
+} from "@/lib/analytics/season-analysis";
 import { summarizeConsistency } from "@/lib/analytics/consistency";
 import { suggestStartSit } from "@/lib/analytics/start-sit";
 import { evaluateTrade } from "@/lib/analytics/trade";
 import { rankWaiverTargets } from "@/lib/analytics/waivers";
 import { webSearch } from "@/lib/agent/web-search";
 import { fetchRankingsBoard } from "@/lib/rankings/data";
+import { normalizeNflTeam } from "@/lib/nflverse/matchups-sync";
 import type { WorkingLineupEntry } from "@/lib/league/working-lineup";
 import { isStarterSlot } from "@/lib/league/slot-order";
 import type { ScoringFormat } from "@/lib/supabase/types";
@@ -398,6 +408,185 @@ export function createLeagueTools(
     },
   );
 
+  const analyze_season_players = tool(
+    async (input) => {
+      const { season, rows } = await loadSeasonAnalysisRows(leagueId);
+      if (rows.length === 0) {
+        return json({
+          error: "No roster/week-point data. Sync ESPN so weekly actuals populate.",
+          season,
+        });
+      }
+      const result = analyzeSeasonPlayers(rows, {
+        position: input.position,
+        availableOnly: input.availableOnly,
+        nameContains: input.nameContains,
+        minGames: input.minGames,
+        minMean: input.minMean,
+        maxCv: input.maxCv,
+        orderBy: input.orderBy,
+        orderDir: input.orderDir,
+        limit: input.limit,
+      });
+      return json({
+        season,
+        note: "consistencyScore = mean / stdev (higher = productive and steady). availableOnly = not on your roster. Sync ESPN for weekly actuals.",
+        columns: SEASON_ANALYSIS_COLUMNS,
+        count: result.length,
+        players: result,
+      });
+    },
+    {
+      name: "analyze_season_players",
+      description:
+        "Free filter/sort analysis over league-rostered players with ESPN weekly actuals: mean, σ, CV, consistencyScore (mean/σ), floor/ceiling, boom/bust, week/ROS proj. Use for questions like 'most consistent high scorers' (orderBy consistencyScore).",
+      schema: z.object({
+        position: z.enum(["QB", "RB", "WR", "TE", "K", "DST"]).optional(),
+        availableOnly: z
+          .boolean()
+          .optional()
+          .describe("If true, only players not on your team"),
+        nameContains: z.string().optional(),
+        minGames: z.number().int().min(1).max(18).optional(),
+        minMean: z.number().optional(),
+        maxCv: z.number().optional().describe("Max coefficient of variation (lower = steadier)"),
+        orderBy: z.enum(SEASON_ANALYSIS_COLUMNS).optional().default("consistencyScore"),
+        orderDir: z.enum(["asc", "desc"]).optional(),
+        limit: z.number().int().min(1).max(80).optional().default(25),
+      }),
+    },
+  );
+
+  const query_defense_matchups = tool(
+    async (input) => {
+      const bundle = await fetchLeagueBundle(leagueId);
+      if (!bundle) return json({ error: "League not found" });
+      const season = input.season ?? bundle.league.season;
+      const rows = await fetchDefenseMatchups({
+        season,
+        position: input.position,
+        defenseTeam: input.defenseTeam
+          ? normalizeNflTeam(input.defenseTeam) ?? input.defenseTeam
+          : undefined,
+        orderBy: input.orderBy,
+        orderDir: input.orderDir,
+        limit: input.limit ?? 32,
+      });
+      if (rows.length === 0) {
+        return json({
+          error:
+            "No defense matchup data. Sync NFL matchups (nflverse) for this league season.",
+          season,
+        });
+      }
+      return json({
+        season,
+        note: "fant_pts_avg = fantasy pts allowed/game to that position (higher = softer). rush_ypc_vs_avg = defense rush YPC allowed minus league avg (negative = stingier vs the run).",
+        count: rows.length,
+        defenses: rows,
+      });
+    },
+    {
+      name: "query_defense_matchups",
+      description:
+        "NFL defense vs position board: fantasy points allowed, rush YPC allowed, YPC vs league average, ranks. E.g. how RBs fare vs SEA.",
+      schema: z.object({
+        position: z.enum(["QB", "RB", "WR", "TE"]).optional(),
+        defenseTeam: z.string().optional().describe("NFL team abbr, e.g. SEA"),
+        season: z.number().int().optional(),
+        orderBy: z
+          .enum(["fant_pts_avg", "fant_pts_ppr_avg", "rush_ypc", "rush_ypc_vs_avg", "fant_pts_rank"])
+          .optional(),
+        orderDir: z.enum(["asc", "desc"]).optional(),
+        limit: z.number().int().min(1).max(40).optional(),
+      }),
+    },
+  );
+
+  const get_player_matchup = tool(
+    async (input) => {
+      const bundle = await fetchLeagueBundle(leagueId);
+      if (!bundle) return json({ error: "League not found" });
+      const week =
+        input.week ??
+        (bundle.league.current_week && bundle.league.current_week > 0
+          ? bundle.league.current_week
+          : 1);
+
+      let espnId = input.espnPlayerId;
+      if (espnId == null && input.name) {
+        const needle = input.name.trim().toLowerCase();
+        espnId = bundle.rosterEntries.find((r) =>
+          r.player_name.toLowerCase().includes(needle),
+        )?.espn_player_id;
+      }
+      if (espnId == null) return json({ error: "Player not found on league rosters" });
+
+      const row = bundle.rosterEntries.find((r) => r.espn_player_id === espnId);
+      if (!row) return json({ error: "Player not found" });
+      const nflTeam = normalizeNflTeam(row.nfl_team);
+      if (!nflTeam) return json({ error: "Player has no NFL team", player: row.player_name });
+
+      const position = ["QB", "RB", "WR", "TE"].includes(row.position)
+        ? row.position
+        : null;
+      if (!position) {
+        return json({
+          error: `Matchup board is for QB/RB/WR/TE (got ${row.position})`,
+          player: row.player_name,
+        });
+      }
+
+      const opp = await fetchOpponentForTeam({
+        season: bundle.league.season,
+        week,
+        nflTeam,
+      });
+      if (!opp) {
+        return json({
+          error: "No schedule opponent found — sync NFL matchups / check week",
+          player: row.player_name,
+          nflTeam,
+          week,
+        });
+      }
+
+      const defenses = await fetchDefenseMatchups({
+        season: bundle.league.season,
+        position,
+        defenseTeam: opp.opponent,
+        limit: 1,
+      });
+      const defense = defenses[0] ?? null;
+
+      return json({
+        player: {
+          espnPlayerId: row.espn_player_id,
+          name: row.player_name,
+          position,
+          nflTeam,
+        },
+        week,
+        opponent: opp.opponent,
+        home: opp.home,
+        defenseVsPosition: defense,
+        note: defense
+          ? `Vs ${opp.opponent}: ${position}s avg ${defense.fant_pts_avg} FPTS/g (rank ${defense.fant_pts_rank}; 1=softest). Rush YPC allowed ${defense.rush_ypc} (Δ vs avg ${defense.rush_ypc_vs_avg}).`
+          : "Opponent found but no defense-vs-position row — sync NFL matchups.",
+      });
+    },
+    {
+      name: "get_player_matchup",
+      description:
+        "This week's NFL opponent and defense-vs-position stats for a roster player (by name or espnPlayerId).",
+      schema: z.object({
+        espnPlayerId: z.number().int().optional(),
+        name: z.string().optional(),
+        week: z.number().int().min(1).max(22).optional(),
+      }),
+    },
+  );
+
   const waiver_targets = tool(
     async (input) => {
       const bundle = await fetchLeagueBundle(leagueId);
@@ -481,6 +670,9 @@ export function createLeagueTools(
     suggest_start_sit,
     evaluate_trade,
     player_consistency,
+    analyze_season_players,
+    query_defense_matchups,
+    get_player_matchup,
     waiver_targets,
     web_search,
   ];

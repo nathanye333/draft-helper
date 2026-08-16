@@ -135,10 +135,12 @@ function leagueSystemPrompt(
     "Rosters come from ESPN sync; shared FantasyPros rankings + week/ROS projections are cached in Postgres — use tools, do not invent numbers.",
     "Be decisive: call tools and give a clear recommendation in one reply.",
     "Do not ask follow-up questions or menus. State short assumptions and proceed.",
-    "Use get_my_roster for the current lineup (sandbox if the user rearranged Start/Sit), suggest_start_sit for the algorithmic recommendation, evaluate_trade for trades, waiver_targets for FA/waivers, player_consistency for weekly variance/floor/ceiling from ESPN actuals.",
+    "Use get_my_roster for the current lineup (sandbox if the user rearranged Start/Sit), suggest_start_sit for the algorithmic recommendation, evaluate_trade for trades, waiver_targets for FA/waivers, player_consistency for single-player weekly variance.",
+    "Use analyze_season_players for free filter/sort analysis (e.g. orderBy consistencyScore = mean/σ for productive+steady players).",
+    "Use query_defense_matchups / get_player_matchup for NFL defense-vs-position context (fantasy pts allowed, rush YPC vs avg).",
     "Use query_players / get_player / compare_players / find_value_plays on the shared rankings board for ADP/ECR/projection analysis; availableOnly means unrostered in this league.",
     "Use web_search only for news/injuries outside cached data.",
-    "Cite week/ROS/ADP/ECR and consistency (σ, CV, boom/bust) numbers from tools. You are read-only — lineup sandbox changes are temporary and not saved to ESPN.",
+    "Cite week/ROS/ADP/ECR, consistency (σ, CV, mean/σ), and matchup numbers from tools. You are read-only — lineup sandbox changes are temporary and not saved to ESPN.",
   ];
   if (workingLineup && workingLineup.length > 0) {
     const lines = workingLineup.map(

@@ -3,6 +3,7 @@
 import { useState, useTransition } from "react";
 import {
   refreshLeague,
+  refreshLeagueNflMatchups,
   refreshLeagueProjections,
   refreshLeagueRankings,
 } from "@/app/actions/league";
@@ -69,6 +70,25 @@ export function LeagueSyncButtons({ leagueId }: { leagueId: string }) {
         }}
       >
         Sync projections
+      </Button>
+      <Button
+        type="button"
+        size="sm"
+        variant="secondary"
+        disabled={pending}
+        onClick={() => {
+          setMessage(null);
+          startTransition(async () => {
+            const result = await refreshLeagueNflMatchups(leagueId);
+            setMessage(
+              result.ok
+                ? `NFL matchups synced · ${result.defenseRows} D-vs-pos · ${result.scheduleRows} games (season ${result.season})`
+                : result.message,
+            );
+          });
+        }}
+      >
+        Sync NFL matchups
       </Button>
       {message ? <span className="text-xs text-slate-400">{message}</span> : null}
     </div>
