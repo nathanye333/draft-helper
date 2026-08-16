@@ -1,6 +1,6 @@
 import { notFound, redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
-import { fetchLeagueBundle, rosterSlotsFromLeague, userTeam } from "@/lib/league/data";
+import { fetchLeagueBundle, irSlotCountFromLeague, rosterSlotsFromLeague, userTeam } from "@/lib/league/data";
 import { resolveEspnImageUrl } from "@/lib/espn/player-universe";
 import { suggestStartSit } from "@/lib/analytics/start-sit";
 import { LeagueNav } from "@/components/league/league-nav";
@@ -153,6 +153,7 @@ export default async function StartSitPage({
       <RosterLineupTable
         leagueId={id}
         currentWeek={bundle.league.current_week}
+        irSlotCount={irSlotCountFromLeague(bundle.league)}
         players={lineupPlayers}
         emptyMessage="Sync ESPN and projections to build a lineup."
       />

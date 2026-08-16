@@ -1,6 +1,6 @@
 import { notFound, redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
-import { fetchLeagueBundle, userTeam } from "@/lib/league/data";
+import { fetchLeagueBundle, irSlotCountFromLeague, userTeam } from "@/lib/league/data";
 import { resolveEspnImageUrl } from "@/lib/espn/player-universe";
 import { LeagueNav } from "@/components/league/league-nav";
 import { LeagueSyncButtons } from "@/components/league/league-sync-buttons";
@@ -126,6 +126,7 @@ export default async function LeagueOverviewPage({
           <RosterLineupTable
             leagueId={id}
             currentWeek={bundle.league.current_week}
+            irSlotCount={irSlotCountFromLeague(bundle.league)}
             players={lineupPlayers}
             emptyMessage="No roster yet — sync ESPN."
           />

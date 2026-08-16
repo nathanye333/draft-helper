@@ -26,7 +26,7 @@ const createDraftSchema = z.object({
   rosterSlots: z
     .array(
       z.object({
-        slotType: z.enum(["QB", "RB", "WR", "TE", "FLEX", "K", "DST", "BENCH"]),
+        slotType: z.enum(["QB", "RB", "WR", "TE", "FLEX", "K", "DST", "BENCH", "IR"]),
         count: z.number().int().min(1),
         sortOrder: z.number().int(),
       }),

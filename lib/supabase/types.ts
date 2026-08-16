@@ -1,7 +1,7 @@
 export type ScoringFormat = "STD" | "PPR" | "HALF";
 export type DraftType = "snake" | "auction";
 export type DraftStatus = "setup" | "live" | "complete";
-export type SlotType = "QB" | "RB" | "WR" | "TE" | "FLEX" | "K" | "DST" | "BENCH";
+export type SlotType = "QB" | "RB" | "WR" | "TE" | "FLEX" | "K" | "DST" | "BENCH" | "IR";
 export type Position = "QB" | "RB" | "WR" | "TE" | "K" | "DST";
 
 export interface Draft {

@@ -88,7 +88,13 @@ export async function fetchLeagueBundle(leagueId: string): Promise<LeagueBundle 
 
 export function rosterSlotsFromLeague(league: League): { slot_type: SlotType; count: number }[] {
   const slots = league.settings?.rosterSlots;
-  if (Array.isArray(slots) && slots.length > 0) return slots;
+  if (Array.isArray(slots) && slots.length > 0) {
+    // Older syncs omitted IR; keep league settings but ensure IR capacity exists.
+    if (!slots.some((s) => s.slot_type === "IR")) {
+      return [...slots, { slot_type: "IR", count: 2 }];
+    }
+    return slots;
+  }
   return [
     { slot_type: "QB", count: 1 },
     { slot_type: "RB", count: 2 },
@@ -98,7 +104,13 @@ export function rosterSlotsFromLeague(league: League): { slot_type: SlotType; co
     { slot_type: "DST", count: 1 },
     { slot_type: "K", count: 1 },
     { slot_type: "BENCH", count: 6 },
+    { slot_type: "IR", count: 2 },
   ];
+}
+
+export function irSlotCountFromLeague(league: League): number {
+  const ir = rosterSlotsFromLeague(league).find((s) => s.slot_type === "IR");
+  return ir?.count && ir.count > 0 ? ir.count : 2;
 }
 
 export function userTeam(bundle: LeagueBundle): LeagueTeam | undefined {

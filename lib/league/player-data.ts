@@ -3,6 +3,7 @@ import { resolveEspnImageUrl } from "@/lib/espn/player-universe";
 import type {
   EspnPlayer,
   EspnPlayerWeekPoints,
+  League,
   LeaguePlayerPoolRow,
   LeagueTeam,
 } from "@/lib/supabase/types";
@@ -159,7 +160,7 @@ export async function fetchTeamRosterPage(leagueId: string, espnTeamId: number) 
       .eq("league_id", leagueId)
       .eq("espn_team_id", espnTeamId)
       .maybeSingle(),
-    supabase.from("leagues").select("current_week, season, scoring").eq("id", leagueId).single(),
+    supabase.from("leagues").select("current_week, season, scoring, settings").eq("id", leagueId).single(),
   ]);
   if (!team) return null;
 
@@ -233,9 +234,12 @@ export async function fetchTeamRosterPage(leagueId: string, espnTeamId: number) 
     }
   }
 
+  const settings = (league as { settings?: League["settings"] } | null)?.settings;
+  const irFromSettings = settings?.rosterSlots?.find((s) => s.slot_type === "IR")?.count;
   return {
     team: team as LeagueTeam,
     currentWeek: (league?.current_week as number | null) ?? null,
+    irSlotCount: irFromSettings && irFromSettings > 0 ? irFromSettings : 2,
     players,
   };
 }

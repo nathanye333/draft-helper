@@ -195,6 +195,7 @@ function mapRosterSlots(
   add("DST", 16);
   add("K", 17);
   add("BENCH", 20);
+  add("IR", 21);
   if (out.length === 0) {
     return [
       { slot_type: "QB", count: 1 },
@@ -205,6 +206,7 @@ function mapRosterSlots(
       { slot_type: "DST", count: 1 },
       { slot_type: "K", count: 1 },
       { slot_type: "BENCH", count: 6 },
+      { slot_type: "IR", count: 2 },
     ];
   }
   return out;

@@ -84,15 +84,43 @@ function SectionHeader({ title }: { title: string }) {
   );
 }
 
+function emptyIrRow(): LineupPlayerRow {
+  return {
+    espnPlayerId: 0,
+    name: "",
+    position: "",
+    nflTeam: null,
+    lineupSlot: "IR",
+    headshotUrl: null,
+    injuryStatus: null,
+    weekProjected: null,
+    weekActual: null,
+    seasonProjected: null,
+    seasonActual: null,
+    percentOwned: null,
+    percentStarted: null,
+  };
+}
+
+function padIrRows(filled: LineupPlayerRow[], irSlotCount: number): LineupPlayerRow[] {
+  if (irSlotCount <= 0) return filled;
+  const rows = [...filled];
+  while (rows.length < irSlotCount) rows.push(emptyIrRow());
+  return rows;
+}
+
 export function RosterLineupTable({
   leagueId,
   players,
   currentWeek,
+  irSlotCount = 2,
   emptyMessage = "No players on this roster.",
 }: {
   leagueId: string;
   players: LineupPlayerRow[];
   currentWeek: number | null;
+  /** League IR capacity from ESPN settings (typically 2). */
+  irSlotCount?: number;
   emptyMessage?: string;
 }) {
   const sorted = [...players].sort((a, b) => {
@@ -103,12 +131,30 @@ export function RosterLineupTable({
     return compareLineupSlots(a.lineupSlot, b.lineupSlot) || a.name.localeCompare(b.name);
   });
 
-  const sections: { key: LineupSection; title: string; rows: LineupPlayerRow[] }[] = (
+  const irFilled = sorted.filter((p) => p.lineupSlot === "IR");
+  const irRows = padIrRows(irFilled, irSlotCount);
+
+  const sections: { key: LineupSection; title: string; rows: LineupPlayerRow[]; showTotals: boolean }[] = (
     [
-      { key: "STARTERS" as const, title: "Starters", rows: sorted.filter((p) => isStarterSlot(p.lineupSlot)) },
-      { key: "BENCH" as const, title: "Bench", rows: sorted.filter((p) => p.lineupSlot === "BENCH") },
-      { key: "IR" as const, title: "IR", rows: sorted.filter((p) => p.lineupSlot === "IR") },
-    ] as { key: LineupSection; title: string; rows: LineupPlayerRow[] }[]
+      {
+        key: "STARTERS" as const,
+        title: "Starters",
+        rows: sorted.filter((p) => isStarterSlot(p.lineupSlot)),
+        showTotals: true,
+      },
+      {
+        key: "BENCH" as const,
+        title: "Bench",
+        rows: sorted.filter((p) => p.lineupSlot === "BENCH"),
+        showTotals: true,
+      },
+      {
+        key: "IR" as const,
+        title: "IR",
+        rows: irRows,
+        showTotals: irFilled.length > 0,
+      },
+    ] as { key: LineupSection; title: string; rows: LineupPlayerRow[]; showTotals: boolean }[]
   ).filter((s) => s.rows.length > 0);
 
   if (players.length === 0) {
@@ -136,51 +182,67 @@ export function RosterLineupTable({
           {sections.map((section) => (
             <Fragment key={section.key}>
               <SectionHeader title={section.title} />
-              {section.rows.map((p) => (
-                <tr
-                  key={`${section.key}-${p.espnPlayerId}-${p.lineupSlot}`}
-                  className="border-t border-slate-800/80 hover:bg-slate-900/50"
-                >
-                  <td className="px-3 py-2 text-xs font-medium text-slate-400">{p.lineupSlot}</td>
-                  <td className="px-2 py-2">
-                    <Link
-                      href={`/leagues/${leagueId}/players/${p.espnPlayerId}`}
-                      className="flex items-center gap-2.5"
-                    >
-                      <Headshot url={p.headshotUrl} name={p.name} />
-                      <span>
-                        <span className="font-medium text-sky-400 hover:underline">{p.name}</span>
-                        <span className="mt-0.5 block text-[11px] text-slate-500">
-                          {p.nflTeam ?? "FA"} {p.position}
-                          {p.injuryStatus &&
-                          !["ACTIVE", "NORMAL", "HEALTHY"].includes(p.injuryStatus.toUpperCase()) ? (
-                            <span className="ml-1 text-amber-400">· {p.injuryStatus}</span>
-                          ) : null}
-                        </span>
-                      </span>
-                    </Link>
-                  </td>
-                  <td className="px-2 py-2 text-right tabular-nums text-slate-100">
-                    {p.weekProjected != null ? p.weekProjected.toFixed(1) : "—"}
-                  </td>
-                  <td className="px-2 py-2 text-right tabular-nums text-slate-400">
-                    {p.weekActual != null ? p.weekActual.toFixed(1) : "—"}
-                  </td>
-                  <td className="px-2 py-2 text-right tabular-nums text-slate-400">
-                    {p.percentOwned != null ? p.percentOwned.toFixed(1) : "—"}
-                  </td>
-                  <td className="px-2 py-2 text-right tabular-nums text-slate-400">
-                    {p.percentStarted != null ? p.percentStarted.toFixed(1) : "—"}
-                  </td>
-                  <td className="px-2 py-2 text-right tabular-nums text-slate-300">
-                    {p.seasonProjected != null ? p.seasonProjected.toFixed(1) : "—"}
-                  </td>
-                  <td className="px-3 py-2 text-right tabular-nums text-slate-400">
-                    {p.seasonActual != null ? p.seasonActual.toFixed(1) : "—"}
-                  </td>
-                </tr>
-              ))}
-              <TotalsRow label={`${section.title} total`} rows={section.rows} />
+              {section.rows.map((p, idx) => {
+                const empty = !p.name;
+                return (
+                  <tr
+                    key={
+                      empty
+                        ? `${section.key}-empty-${idx}`
+                        : `${section.key}-${p.espnPlayerId}-${p.lineupSlot}-${idx}`
+                    }
+                    className="border-t border-slate-800/80 hover:bg-slate-900/50"
+                  >
+                    <td className="px-3 py-2 text-xs font-medium text-slate-400">{p.lineupSlot}</td>
+                    <td className="px-2 py-2">
+                      {empty ? (
+                        <span className="text-sm text-slate-600">—</span>
+                      ) : (
+                        <Link
+                          href={`/leagues/${leagueId}/players/${p.espnPlayerId}`}
+                          className="flex items-center gap-2.5"
+                        >
+                          <Headshot url={p.headshotUrl} name={p.name} />
+                          <span>
+                            <span className="font-medium text-sky-400 hover:underline">{p.name}</span>
+                            <span className="mt-0.5 block text-[11px] text-slate-500">
+                              {p.nflTeam ?? "FA"} {p.position}
+                              {p.injuryStatus &&
+                              !["ACTIVE", "NORMAL", "HEALTHY"].includes(p.injuryStatus.toUpperCase()) ? (
+                                <span className="ml-1 text-amber-400">· {p.injuryStatus}</span>
+                              ) : null}
+                            </span>
+                          </span>
+                        </Link>
+                      )}
+                    </td>
+                    <td className="px-2 py-2 text-right tabular-nums text-slate-100">
+                      {p.weekProjected != null ? p.weekProjected.toFixed(1) : "—"}
+                    </td>
+                    <td className="px-2 py-2 text-right tabular-nums text-slate-400">
+                      {p.weekActual != null ? p.weekActual.toFixed(1) : "—"}
+                    </td>
+                    <td className="px-2 py-2 text-right tabular-nums text-slate-400">
+                      {p.percentOwned != null ? p.percentOwned.toFixed(1) : "—"}
+                    </td>
+                    <td className="px-2 py-2 text-right tabular-nums text-slate-400">
+                      {p.percentStarted != null ? p.percentStarted.toFixed(1) : "—"}
+                    </td>
+                    <td className="px-2 py-2 text-right tabular-nums text-slate-300">
+                      {p.seasonProjected != null ? p.seasonProjected.toFixed(1) : "—"}
+                    </td>
+                    <td className="px-3 py-2 text-right tabular-nums text-slate-400">
+                      {p.seasonActual != null ? p.seasonActual.toFixed(1) : "—"}
+                    </td>
+                  </tr>
+                );
+              })}
+              {section.showTotals ? (
+                <TotalsRow
+                  label={`${section.title} total`}
+                  rows={section.rows.filter((r) => r.name)}
+                />
+              ) : null}
             </Fragment>
           ))}
         </tbody>

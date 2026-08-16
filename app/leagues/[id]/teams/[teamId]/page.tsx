@@ -49,6 +49,7 @@ export default async function TeamPage({
       <RosterLineupTable
         leagueId={leagueId}
         currentWeek={page.currentWeek}
+        irSlotCount={page.irSlotCount}
         players={page.players}
       />
     </div>
