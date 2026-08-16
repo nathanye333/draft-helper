@@ -324,107 +324,89 @@ export function parsePlayerWeekStatRows(
 }
 
 /**
- * Sync defense-vs-position + schedule for a season from nflverse public CSVs.
- * Falls back to season-1 player stats if the requested season file is empty/missing.
+ * Sync one NFL season's defense aggregates + weekly player rows under that season's
+ * true year label (never rewrite season onto a different year).
  */
-export async function syncNflMatchupData(season: number): Promise<SyncNflMatchupsResult> {
-  const syncedAt = new Date().toISOString();
+async function syncPlayerStatsForSeason(
+  season: number,
+  syncedAt: string,
+): Promise<{ defenseRows: number; playerWeekRows: number } | { error: string }> {
   const admin = createAdminClient();
-
-  let statsSeason = season;
   let playerCsv: string;
   try {
-    playerCsv = await fetchPlayerStatsCsv(statsSeason);
+    playerCsv = await fetchPlayerStatsCsv(season);
   } catch (err) {
-    if (season > 2000) {
-      statsSeason = season - 1;
-      try {
-        playerCsv = await fetchPlayerStatsCsv(statsSeason);
-      } catch (err2) {
-        return {
-          ok: false,
-          reason: "api_error",
-          message: err2 instanceof Error ? err2.message : "Failed to download player stats",
-        };
-      }
-    } else {
-      return {
-        ok: false,
-        reason: "api_error",
-        message: err instanceof Error ? err.message : "Failed to download player stats",
-      };
-    }
+    return { error: err instanceof Error ? err.message : `Failed to download ${season} stats` };
   }
 
   const playerRows = parseCsv(playerCsv);
-  let aggregated = aggregateDefenseVsPosition(playerRows, statsSeason);
-  if (aggregated.length === 0 && statsSeason === season && season > 2000) {
-    // Preseason / empty file — try prior completed season.
-    statsSeason = season - 1;
-    try {
-      playerCsv = await fetchPlayerStatsCsv(statsSeason);
-      aggregated = aggregateDefenseVsPosition(parseCsv(playerCsv), statsSeason);
-    } catch {
-      // keep empty
-    }
-  }
-
+  const aggregated = aggregateDefenseVsPosition(playerRows, season);
   if (aggregated.length === 0) {
-    return {
-      ok: false,
-      reason: "api_error",
-      message: `No REG player stats found for season ${season} (or ${season - 1}).`,
-    };
+    return { error: `No REG player stats found for season ${season}` };
   }
 
   const defenseRows = enrichDefenseRows(aggregated).map((r) => ({
     ...r,
     synced_at: syncedAt,
   }));
+  const { error: defenseError } = await admin
+    .from("nfl_defense_vs_position")
+    .upsert(defenseRows, { onConflict: "season,defense_team,position" });
+  if (defenseError) return { error: defenseError.message };
 
-  // Store under the requested season key when we fell back, so league.season lookups work,
-  // but keep statsSeason embedded via note in synced data — actually better to store under
-  // statsSeason and also copy to requested season if different.
-  const seasonsToWrite = statsSeason === season ? [season] : [statsSeason, season];
-  for (const writeSeason of seasonsToWrite) {
-    const payload = defenseRows.map((r) => ({ ...r, season: writeSeason }));
+  const weekStats = parsePlayerWeekStatRows(playerRows, season);
+  const chunkSize = 500;
+  for (let i = 0; i < weekStats.length; i += chunkSize) {
+    const chunk = weekStats.slice(i, i + chunkSize).map((r) => ({
+      ...r,
+      synced_at: syncedAt,
+    }));
     const { error } = await admin
-      .from("nfl_defense_vs_position")
-      .upsert(payload, { onConflict: "season,defense_team,position" });
-    if (error) {
-      return { ok: false, reason: "api_error", message: error.message };
-    }
+      .from("nfl_player_week_stats")
+      .upsert(chunk, { onConflict: "season,week,player_id" });
+    if (error) return { error: error.message };
   }
 
-  // Persist raw weekly player rows for free-form SQL (normalized matchup analyses, etc.).
+  return { defenseRows: defenseRows.length, playerWeekRows: weekStats.length };
+}
+
+/**
+ * Sync defense-vs-position + weekly player stats + schedule from nflverse.
+ * Always syncs the requested season and the prior season (when available) so
+ * early-season / fantasy leagues still have a full prior year for SQL analysis.
+ * Season labels on stored rows always match the nflverse season they came from.
+ */
+export async function syncNflMatchupData(season: number): Promise<SyncNflMatchupsResult> {
+  const syncedAt = new Date().toISOString();
+  const admin = createAdminClient();
+
+  const seasonsToSync = [...new Set(season > 2000 ? [season, season - 1] : [season])];
+  let defenseRows = 0;
   let playerWeekRows = 0;
-  const weekStats = parsePlayerWeekStatRows(playerRows, statsSeason);
-  if (weekStats.length > 0) {
-    const seasonsForWeeks = statsSeason === season ? [statsSeason] : [statsSeason, season];
-    for (const writeSeason of seasonsForWeeks) {
-      const payload = weekStats.map((r) => ({
-        ...r,
-        season: writeSeason,
-        synced_at: syncedAt,
-      }));
-      // Chunk upserts — PostgREST payload limits.
-      const chunkSize = 500;
-      for (let i = 0; i < payload.length; i += chunkSize) {
-        const chunk = payload.slice(i, i + chunkSize);
-        const { error } = await admin
-          .from("nfl_player_week_stats")
-          .upsert(chunk, { onConflict: "season,week,player_id" });
-        if (error) {
-          return { ok: false, reason: "api_error", message: error.message };
-        }
-      }
-      playerWeekRows = weekStats.length;
+  const syncedSeasons: number[] = [];
+  const errors: string[] = [];
+
+  for (const s of seasonsToSync) {
+    const result = await syncPlayerStatsForSeason(s, syncedAt);
+    if ("error" in result) {
+      errors.push(`${s}: ${result.error}`);
+      continue;
     }
+    syncedSeasons.push(s);
+    defenseRows += result.defenseRows;
+    playerWeekRows += result.playerWeekRows;
+  }
+
+  if (syncedSeasons.length === 0) {
+    return {
+      ok: false,
+      reason: "api_error",
+      message: errors.join(" | ") || `No REG player stats found for ${seasonsToSync.join(", ")}.`,
+    };
   }
 
   let scheduleRows = 0;
   try {
-    // Prefer nflverse-data schedules release; fall back to nfldata repo.
     let scheduleCsv: string;
     try {
       scheduleCsv = await fetchText(
@@ -435,39 +417,29 @@ export async function syncNflMatchupData(season: number): Promise<SyncNflMatchup
         `https://raw.githubusercontent.com/nflverse/nfldata/master/data/games.csv`,
       );
     }
-    const parsed = parseScheduleRows(parseCsv(scheduleCsv), season);
-    // If empty for future season, also try statsSeason
-    const schedulePayload =
-      parsed.length > 0 ? parsed : parseScheduleRows(parseCsv(scheduleCsv), statsSeason);
-
-    if (schedulePayload.length > 0) {
-      const toWrite =
-        parsed.length > 0
-          ? schedulePayload
-          : schedulePayload.map((g) => ({ ...g, season }));
-      const { error } = await admin
-        .from("nfl_schedule_games")
-        .upsert(
-          toWrite.map((g) => ({ ...g, synced_at: syncedAt })),
-          { onConflict: "season,week,home_team,away_team" },
-        );
+    const scheduleSeasons = [...new Set([season, ...syncedSeasons])];
+    for (const schedSeason of scheduleSeasons) {
+      const parsed = parseScheduleRows(parseCsv(scheduleCsv), schedSeason);
+      if (parsed.length === 0) continue;
+      const { error } = await admin.from("nfl_schedule_games").upsert(
+        parsed.map((g) => ({ ...g, synced_at: syncedAt })),
+        { onConflict: "season,week,home_team,away_team" },
+      );
       if (error) {
         console.warn("Schedule sync failed:", error.message);
       } else {
-        scheduleRows = toWrite.length;
+        scheduleRows += parsed.length;
       }
     }
   } catch (err) {
-    console.warn(
-      "Schedule sync skipped:",
-      err instanceof Error ? err.message : err,
-    );
+    console.warn("Schedule sync skipped:", err instanceof Error ? err.message : err);
   }
 
   return {
     ok: true,
-    season: statsSeason,
-    defenseRows: defenseRows.length,
+    // Prefer reporting the league season when it synced; else the prior year we got.
+    season: syncedSeasons.includes(season) ? season : syncedSeasons[0]!,
+    defenseRows,
     scheduleRows,
     playerWeekRows,
     syncedAt,

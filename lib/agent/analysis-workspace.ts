@@ -26,6 +26,29 @@ const BASE_TABLES = new Set([
   "schedule_games",
 ]);
 
+/** League season + prior year for SQL (early-season leagues still get a full prior year). */
+export function analysisStatsSeasons(leagueSeason: number): number[] {
+  return leagueSeason > 2000
+    ? [...new Set([leagueSeason, leagueSeason - 1])]
+    : [leagueSeason];
+}
+
+async function fetchAllSupabaseRows<T extends Record<string, unknown>>(
+  page: (from: number, to: number) => PromiseLike<{ data: T[] | null; error: { message: string } | null }>,
+): Promise<T[]> {
+  const pageSize = 1000;
+  const all: T[] = [];
+  for (let from = 0; ; from += pageSize) {
+    const to = from + pageSize - 1;
+    const { data, error } = await page(from, to);
+    if (error) throw new Error(error.message);
+    const rows = data ?? [];
+    all.push(...rows);
+    if (rows.length < pageSize) break;
+  }
+  return all;
+}
+
 export interface AnalysisSqlResult {
   columns: string[];
   rows: Record<string, unknown>[];
@@ -191,6 +214,7 @@ export function createAnalysisWorkspace(leagueId: string): AnalysisWorkspace {
     if (!bundle) throw new Error("League not found");
     const season = bundle.league.season;
     const mine = userTeam(bundle);
+    const statsSeasons = analysisStatsSeasons(season);
 
     db.run(`
       CREATE TABLE season_players (
@@ -380,7 +404,7 @@ export function createAnalysisWorkspace(leagueId: string): AnalysisWorkspace {
       .select(
         "season, defense_team, position, games, fant_pts_avg, fant_pts_ppr_avg, fant_pts_rank, rush_att, rush_yds, rush_ypc, rush_ypc_vs_avg, pass_att, pass_yds, pass_ypa, targets, receptions, rec_yds",
       )
-      .eq("season", season);
+      .in("season", statsSeasons);
     insertRows(
       db,
       "defense_vs_position",
@@ -406,13 +430,19 @@ export function createAnalysisWorkspace(leagueId: string): AnalysisWorkspace {
       (defense ?? []) as Record<string, unknown>[],
     );
 
-    const { data: weeks } = await supabase
-      .from("nfl_player_week_stats")
-      .select(
-        "season, week, player_id, player_name, position, team, opponent_team, fantasy_points, fantasy_points_ppr, carries, rushing_yards, rushing_tds, targets, receptions, receiving_yards, receiving_tds, attempts, passing_yards, passing_tds",
-      )
-      .eq("season", season)
-      .eq("season_type", "REG");
+    const weeks = await fetchAllSupabaseRows((from, to) =>
+      supabase
+        .from("nfl_player_week_stats")
+        .select(
+          "season, week, player_id, player_name, position, team, opponent_team, fantasy_points, fantasy_points_ppr, carries, rushing_yards, rushing_tds, targets, receptions, receiving_yards, receiving_tds, attempts, passing_yards, passing_tds",
+        )
+        .in("season", statsSeasons)
+        .eq("season_type", "REG")
+        .order("season", { ascending: true })
+        .order("week", { ascending: true })
+        .order("player_id", { ascending: true })
+        .range(from, to),
+    );
     insertRows(
       db,
       "nfl_player_weeks",
@@ -437,13 +467,13 @@ export function createAnalysisWorkspace(leagueId: string): AnalysisWorkspace {
         "passing_yards",
         "passing_tds",
       ],
-      (weeks ?? []) as Record<string, unknown>[],
+      weeks as Record<string, unknown>[],
     );
 
     const { data: schedule } = await supabase
       .from("nfl_schedule_games")
       .select("season, week, game_type, home_team, away_team, gameday")
-      .eq("season", season);
+      .in("season", statsSeasons);
     insertRows(
       db,
       "schedule_games",
@@ -459,20 +489,22 @@ export function createAnalysisWorkspace(leagueId: string): AnalysisWorkspace {
       "README_analysis.txt",
       [
         "Analysis workspace (in-memory SQLite + CSV scratch).",
+        `League season ${season}; nfl tables include seasons: ${statsSeasons.join(", ")}.`,
+        "Filter with WHERE season = … — season labels are the real NFL year.",
         "Base tables are read-only. Create scratch_* tables for intermediates.",
-        "Example — defense vs RBs normalized by RB season averages:",
+        "Example — 2025 defense vs RBs normalized by RB season averages:",
         "WITH rb_avgs AS (",
-        "  SELECT player_id, AVG(fantasy_points) AS avg_fp",
-        "  FROM nfl_player_weeks WHERE position='RB' GROUP BY player_id",
+        "  SELECT player_id, AVG(fantasy_points_ppr) AS avg_fp",
+        "  FROM nfl_player_weeks WHERE season=2025 AND position='RB' GROUP BY player_id",
         "),",
         "faced AS (",
         "  SELECT w.opponent_team AS defense_team,",
-        "         AVG(w.fantasy_points - a.avg_fp) AS fp_vs_rb_avg,",
-        "         AVG(w.fantasy_points) AS fp_allowed,",
+        "         AVG(w.fantasy_points_ppr - a.avg_fp) AS fp_vs_rb_avg,",
+        "         AVG(w.fantasy_points_ppr) AS fp_allowed,",
         "         COUNT(*) AS n",
         "  FROM nfl_player_weeks w",
         "  JOIN rb_avgs a ON a.player_id = w.player_id",
-        "  WHERE w.position='RB'",
+        "  WHERE w.season=2025 AND w.position='RB'",
         "  GROUP BY w.opponent_team",
         ")",
         "SELECT * FROM faced ORDER BY fp_vs_rb_avg ASC LIMIT 15;",
@@ -592,9 +624,9 @@ export function createAnalysisWorkspace(leagueId: string): AnalysisWorkspace {
         "- season_players: league roster analysis (mean/stdev/cv/consistency_score/week_proj/ros_proj)",
         "- espn_week_points: ESPN weekly actual/projected points for rostered players",
         "- league_rosters: ESPN roster rows + is_my_team",
-        "- defense_vs_position: aggregated D vs QB/RB/WR/TE",
-        "- nfl_player_weeks: nflverse weekly player fantasy/box stats (for custom matchup math)",
-        "- schedule_games: NFL schedule",
+        "- defense_vs_position: aggregated D vs QB/RB/WR/TE (league season + prior year)",
+        "- nfl_player_weeks: nflverse weekly player fantasy/box stats (league season + prior year; filter WHERE season=YYYY)",
+        "- schedule_games: NFL schedule (league season + prior year)",
         "Scratch: CREATE TABLE scratch_x AS SELECT ...; CSV via analysis_write_csv / analysis_load_csv.",
         "Mutations only on scratch_*/tmp_*. Prefer analysis_sql for novel stats instead of new tools.",
       ].join("\n");
@@ -614,6 +646,7 @@ export function analysisBaseSchemaText(): string {
     "nfl_player_weeks(season, week, player_id, player_name, position, team, opponent_team, fantasy_points, fantasy_points_ppr, carries, rushing_yards, rushing_tds, targets, receptions, receiving_yards, receiving_tds, attempts, passing_yards, passing_tds)",
     "schedule_games(season, week, game_type, home_team, away_team, gameday)",
     "Rules: SQLite; one statement; SELECT/WITH ok; CREATE/INSERT/DELETE/DROP only on scratch_* or tmp_*.",
+    "nfl_player_weeks / defense_vs_position / schedule_games include league season and prior year — always filter WHERE season = YYYY (true NFL year).",
   ].join("\n");
 }
 

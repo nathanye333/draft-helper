@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { assertSafeAnalysisSql } from "@/lib/agent/analysis-workspace";
+import {
+  analysisStatsSeasons,
+  assertSafeAnalysisSql,
+} from "@/lib/agent/analysis-workspace";
 
 describe("assertSafeAnalysisSql", () => {
   it("allows select/with and scratch mutations", () => {
@@ -19,5 +22,12 @@ describe("assertSafeAnalysisSql", () => {
     );
     expect(() => assertSafeAnalysisSql("DELETE FROM season_players")).toThrow(/scratch_/i);
     expect(() => assertSafeAnalysisSql("ATTACH DATABASE 'x' AS y")).toThrow(/not allowed/i);
+  });
+});
+
+describe("analysisStatsSeasons", () => {
+  it("includes prior year for fantasy leagues", () => {
+    expect(analysisStatsSeasons(2026)).toEqual([2026, 2025]);
+    expect(analysisStatsSeasons(2025)).toEqual([2025, 2024]);
   });
 });

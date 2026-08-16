@@ -92,18 +92,25 @@ export async function fetchDefenseMatchups(params: {
   orderDir?: "asc" | "desc";
 }) {
   const supabase = await createClient();
-  let q = supabase.from("nfl_defense_vs_position").select("*").eq("season", params.season);
 
-  if (params.position) q = q.eq("position", params.position.toUpperCase());
-  if (params.defenseTeam) q = q.eq("defense_team", params.defenseTeam.toUpperCase());
+  async function querySeason(season: number) {
+    let q = supabase.from("nfl_defense_vs_position").select("*").eq("season", season);
 
-  const orderBy = params.orderBy ?? "fant_pts_avg";
-  const ascending = (params.orderDir ?? "desc") === "asc";
-  q = q.order(orderBy, { ascending, nullsFirst: false }).limit(params.limit ?? 32);
+    if (params.position) q = q.eq("position", params.position.toUpperCase());
+    if (params.defenseTeam) q = q.eq("defense_team", params.defenseTeam.toUpperCase());
 
-  const { data, error } = await q;
-  if (error) throw new Error(error.message);
-  return data ?? [];
+    const orderBy = params.orderBy ?? "fant_pts_avg";
+    const ascending = (params.orderDir ?? "desc") === "asc";
+    q = q.order(orderBy, { ascending, nullsFirst: false }).limit(params.limit ?? 32);
+
+    const { data, error } = await q;
+    if (error) throw new Error(error.message);
+    return data ?? [];
+  }
+
+  const primary = await querySeason(params.season);
+  if (primary.length > 0 || params.season <= 2000) return primary;
+  return querySeason(params.season - 1);
 }
 
 export async function fetchOpponentForTeam(params: {

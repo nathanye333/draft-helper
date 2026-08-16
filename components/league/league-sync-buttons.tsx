@@ -82,7 +82,7 @@ export function LeagueSyncButtons({ leagueId }: { leagueId: string }) {
             const result = await refreshLeagueNflMatchups(leagueId);
             setMessage(
               result.ok
-                ? `NFL matchups synced · ${result.defenseRows} D-vs-pos · ${result.playerWeekRows} player-weeks · ${result.scheduleRows} games (season ${result.season})`
+                ? `NFL matchups synced · ${result.defenseRows} D-vs-pos · ${result.playerWeekRows} player-weeks · ${result.scheduleRows} games (incl. prior year when available; reported season ${result.season})`
                 : result.message,
             );
           });
