@@ -2,7 +2,14 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { numOrNull, parseCsv } from "@/lib/nflverse/csv";
 
 export type SyncNflMatchupsResult =
-  | { ok: true; season: number; defenseRows: number; scheduleRows: number; syncedAt: string }
+  | {
+      ok: true;
+      season: number;
+      defenseRows: number;
+      scheduleRows: number;
+      playerWeekRows: number;
+      syncedAt: string;
+    }
   | { ok: false; reason: "api_error"; message: string };
 
 const POSITIONS = new Set(["QB", "RB", "WR", "TE"]);
@@ -247,6 +254,75 @@ export function parseScheduleRows(
   return out;
 }
 
+const WEEK_STAT_POSITIONS = new Set(["QB", "RB", "WR", "TE"]);
+
+/** Flatten nflverse weekly rows for SQL analysis storage. */
+export function parsePlayerWeekStatRows(
+  rows: Record<string, string>[],
+  season: number,
+): Array<{
+  season: number;
+  week: number;
+  season_type: string;
+  player_id: string;
+  player_name: string;
+  position: string;
+  team: string;
+  opponent_team: string;
+  fantasy_points: number | null;
+  fantasy_points_ppr: number | null;
+  carries: number | null;
+  rushing_yards: number | null;
+  rushing_tds: number | null;
+  targets: number | null;
+  receptions: number | null;
+  receiving_yards: number | null;
+  receiving_tds: number | null;
+  attempts: number | null;
+  passing_yards: number | null;
+  passing_tds: number | null;
+}> {
+  const out: ReturnType<typeof parsePlayerWeekStatRows> = [];
+  for (const row of rows) {
+    if (numOrNull(row.season) !== season) continue;
+    const seasonType = (row.season_type ?? "REG").toUpperCase();
+    if (seasonType !== "REG") continue;
+    const position = (row.position ?? "").toUpperCase();
+    if (!WEEK_STAT_POSITIONS.has(position)) continue;
+    const week = numOrNull(row.week);
+    if (week == null || week < 1) continue;
+    const playerId = (row.player_id ?? "").trim();
+    if (!playerId) continue;
+    const team = normalizeNflTeam(row.team ?? row.recent_team);
+    const opponent = normalizeNflTeam(row.opponent_team);
+    if (!team || !opponent) continue;
+    const name = (row.player_display_name || row.player_name || playerId).trim();
+    out.push({
+      season,
+      week,
+      season_type: seasonType,
+      player_id: playerId,
+      player_name: name,
+      position,
+      team,
+      opponent_team: opponent,
+      fantasy_points: numOrNull(row.fantasy_points),
+      fantasy_points_ppr: numOrNull(row.fantasy_points_ppr),
+      carries: numOrNull(row.carries),
+      rushing_yards: numOrNull(row.rushing_yards),
+      rushing_tds: numOrNull(row.rushing_tds),
+      targets: numOrNull(row.targets),
+      receptions: numOrNull(row.receptions),
+      receiving_yards: numOrNull(row.receiving_yards),
+      receiving_tds: numOrNull(row.receiving_tds),
+      attempts: numOrNull(row.attempts),
+      passing_yards: numOrNull(row.passing_yards),
+      passing_tds: numOrNull(row.passing_tds),
+    });
+  }
+  return out;
+}
+
 /**
  * Sync defense-vs-position + schedule for a season from nflverse public CSVs.
  * Falls back to season-1 player stats if the requested season file is empty/missing.
@@ -320,6 +396,32 @@ export async function syncNflMatchupData(season: number): Promise<SyncNflMatchup
     }
   }
 
+  // Persist raw weekly player rows for free-form SQL (normalized matchup analyses, etc.).
+  let playerWeekRows = 0;
+  const weekStats = parsePlayerWeekStatRows(playerRows, statsSeason);
+  if (weekStats.length > 0) {
+    const seasonsForWeeks = statsSeason === season ? [statsSeason] : [statsSeason, season];
+    for (const writeSeason of seasonsForWeeks) {
+      const payload = weekStats.map((r) => ({
+        ...r,
+        season: writeSeason,
+        synced_at: syncedAt,
+      }));
+      // Chunk upserts — PostgREST payload limits.
+      const chunkSize = 500;
+      for (let i = 0; i < payload.length; i += chunkSize) {
+        const chunk = payload.slice(i, i + chunkSize);
+        const { error } = await admin
+          .from("nfl_player_week_stats")
+          .upsert(chunk, { onConflict: "season,week,player_id" });
+        if (error) {
+          return { ok: false, reason: "api_error", message: error.message };
+        }
+      }
+      playerWeekRows = weekStats.length;
+    }
+  }
+
   let scheduleRows = 0;
   try {
     // Prefer nflverse-data schedules release; fall back to nfldata repo.
@@ -367,6 +469,7 @@ export async function syncNflMatchupData(season: number): Promise<SyncNflMatchup
     season: statsSeason,
     defenseRows: defenseRows.length,
     scheduleRows,
+    playerWeekRows,
     syncedAt,
   };
 }

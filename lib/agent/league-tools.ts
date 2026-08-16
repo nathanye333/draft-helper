@@ -1,6 +1,7 @@
 import { tool } from "langchain";
 import { z } from "zod";
 import { createPlayerBoardTools } from "@/lib/agent/player-board-tools";
+import { createAnalysisWorkspaceTools } from "@/lib/agent/analysis-tools";
 import { buildSeasonPlayerRows } from "@/lib/agent/player-query";
 import { fetchFreeAgents, fetchLeagueBundle, rosterSlotsFromLeague, userTeam } from "@/lib/league/data";
 import { fetchConsistencyByEspnIds } from "@/lib/league/consistency-data";
@@ -12,6 +13,7 @@ import {
 import {
   analyzeSeasonPlayers,
   SEASON_ANALYSIS_COLUMNS,
+  SEASON_ANALYSIS_EXPR_VARS,
 } from "@/lib/analytics/season-analysis";
 import { summarizeConsistency } from "@/lib/analytics/consistency";
 import { suggestStartSit } from "@/lib/analytics/start-sit";
@@ -56,6 +58,8 @@ export function createLeagueTools(
     loadRows: () => loadSeasonPlayerRows(leagueId),
     availabilityNote: "available = not on any roster in this league (free agent / waiver)",
   });
+
+  const analysisTools = createAnalysisWorkspaceTools(leagueId);
 
   const get_league_snapshot = tool(
     async () => {
@@ -424,22 +428,28 @@ export function createLeagueTools(
         minGames: input.minGames,
         minMean: input.minMean,
         maxCv: input.maxCv,
+        compute: input.compute,
         orderBy: input.orderBy,
         orderDir: input.orderDir,
         limit: input.limit,
       });
+      if (!result.ok) return json({ error: result.error, season });
       return json({
         season,
-        note: "consistencyScore = mean / stdev (higher = productive and steady). availableOnly = not on your roster. Sync ESPN for weekly actuals.",
+        note:
+          "Built-ins include consistencyScore (= mean/stdev). Use compute[] to define new stats with safe exprs over exprVars, then orderBy that alias. availableOnly = not on your roster.",
         columns: SEASON_ANALYSIS_COLUMNS,
-        count: result.length,
-        players: result,
+        exprVars: SEASON_ANALYSIS_EXPR_VARS,
+        exprFns: ["max", "min", "abs", "coalesce"],
+        count: result.players.length,
+        computeErrors: result.computeErrors,
+        players: result.players,
       });
     },
     {
       name: "analyze_season_players",
       description:
-        "Free filter/sort analysis over league-rostered players with ESPN weekly actuals: mean, σ, CV, consistencyScore (mean/σ), floor/ceiling, boom/bust, week/ROS proj. Use for questions like 'most consistent high scorers' (orderBy consistencyScore).",
+        "Filter/sort league-rostered players with weekly actuals. Define new stats via compute: [{as, expr}] using exprVars (mean, stdev, weekProj, …) and max/min/abs/coalesce, then orderBy the alias — e.g. compute [{as:'riskAdj', expr:'mean / max(stdev, 0.1)'}] orderBy riskAdj.",
       schema: z.object({
         position: z.enum(["QB", "RB", "WR", "TE", "K", "DST"]).optional(),
         availableOnly: z
@@ -450,7 +460,27 @@ export function createLeagueTools(
         minGames: z.number().int().min(1).max(18).optional(),
         minMean: z.number().optional(),
         maxCv: z.number().optional().describe("Max coefficient of variation (lower = steadier)"),
-        orderBy: z.enum(SEASON_ANALYSIS_COLUMNS).optional().default("consistencyScore"),
+        compute: z
+          .array(
+            z.object({
+              as: z
+                .string()
+                .min(1)
+                .max(40)
+                .describe("New column name to orderBy, e.g. riskAdj"),
+              expr: z
+                .string()
+                .min(1)
+                .max(200)
+                .describe("Safe formula, e.g. mean / max(stdev, 0.1) or weekProj - mean"),
+            }),
+          )
+          .max(8)
+          .optional(),
+        orderBy: z
+          .string()
+          .optional()
+          .describe("Built-in column or compute.as alias (default consistencyScore)"),
         orderDir: z.enum(["asc", "desc"]).optional(),
         limit: z.number().int().min(1).max(80).optional().default(25),
       }),
@@ -662,6 +692,7 @@ export function createLeagueTools(
 
   return [
     ...boardTools,
+    ...analysisTools,
     get_league_snapshot,
     get_my_roster,
     get_team_roster,

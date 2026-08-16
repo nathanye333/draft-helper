@@ -69,7 +69,8 @@ describe("analyzeSeasonPlayers", () => {
     expect(steady.consistencyScore!).toBeGreaterThan(boom.consistencyScore!);
 
     const ranked = analyzeSeasonPlayers([boom, steady], { minGames: 3, limit: 5 });
-    expect(ranked[0]!.name).toBe("Steady");
+    expect(ranked.ok).toBe(true);
+    if (ranked.ok) expect(ranked.players[0]!.name).toBe("Steady");
   });
 
   it("filters by position and minMean", () => {
@@ -98,7 +99,50 @@ describe("analyzeSeasonPlayers", () => {
       }),
     ];
     const result = analyzeSeasonPlayers(rows, { position: "WR", minMean: 10 });
-    expect(result).toHaveLength(1);
-    expect(result[0]!.name).toBe("WR1");
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.players).toHaveLength(1);
+      expect(result.players[0]!.name).toBe("WR1");
+    }
+  });
+
+  it("computes and sorts by a custom expression", () => {
+    const highFloor = buildSeasonAnalysisRow({
+      espnPlayerId: 1,
+      name: "Floor",
+      position: "WR",
+      nflTeam: "BUF",
+      fantasyTeam: "A",
+      available: true,
+      weekActuals: [14, 15, 13, 14, 15],
+      weekProj: 12,
+      rosProj: 160,
+    });
+    const upside = buildSeasonAnalysisRow({
+      espnPlayerId: 2,
+      name: "Upside",
+      position: "WR",
+      nflTeam: "MIA",
+      fantasyTeam: "B",
+      available: true,
+      weekActuals: [8, 22, 7, 24, 9],
+      weekProj: 18,
+      rosProj: 170,
+    });
+    const result = analyzeSeasonPlayers([highFloor, upside], {
+      minGames: 3,
+      compute: [{ as: "projLift", expr: "weekProj - mean" }],
+      orderBy: "projLift",
+      orderDir: "desc",
+      limit: 5,
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.players[0]!.name).toBe("Upside");
+      expect(result.players[0]!.computed?.projLift).not.toBeNull();
+      expect(result.players[0]!.computed!.projLift!).toBeGreaterThan(
+        result.players[1]!.computed!.projLift!,
+      );
+    }
   });
 });
