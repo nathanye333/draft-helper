@@ -109,40 +109,70 @@ export function userTeam(bundle: LeagueBundle): LeagueTeam | undefined {
   );
 }
 
+function normalizePlayerName(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(/\b(jr|sr|ii|iii|iv|v)\b\.?/g, "")
+    .replace(/[^a-z0-9\s]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+export interface FreeAgentRow {
+  fpPlayerId: string;
+  name: string;
+  position: string;
+  nflTeam: string | null;
+  /** FantasyPros projected points for `projectionWeek` (null if unavailable). */
+  weekProj: number | null;
+  /** FantasyPros rest-of-season / season-long points (week=0 in our cache). */
+  rosProj: number | null;
+  /** NFL week number used for weekProj; null when only ROS is available. */
+  projectionWeek: number | null;
+  source: "fantasypros";
+}
+
+/**
+ * Players not on any ESPN roster in this league, ranked by FantasyPros
+ * weekly (preferred) then ROS projections. Excludes rostered players by
+ * FP id, ESPN→FP map, and normalized name (covers failed ID maps).
+ */
 export async function fetchFreeAgents(params: {
   leagueId: string;
   season: number;
   scoring: ScoringFormat;
   week: number | null;
   limit?: number;
-}): Promise<
-  {
-    fpPlayerId: string;
-    name: string;
-    position: string;
-    nflTeam: string | null;
-    weekProj: number | null;
-    rosProj: number | null;
-  }[]
-> {
+}): Promise<FreeAgentRow[]> {
   const supabase = await createClient();
   const { data: rostered } = await supabase
     .from("league_roster_entries")
-    .select("fp_player_id")
+    .select("fp_player_id, espn_player_id, player_name")
     .eq("league_id", params.leagueId);
 
-  const rosteredFp = new Set(
-    (rostered ?? []).map((r) => r.fp_player_id).filter((id): id is string => Boolean(id)),
-  );
+  const rosteredFp = new Set<string>();
+  const rosteredNames = new Set<string>();
+  const espnIds: number[] = [];
 
-  const weeks = params.week != null && params.week > 0 ? [0, params.week] : [0];
-  const { data: projs } = await supabase
-    .from("player_projections_weekly")
-    .select("fp_player_id, week, proj_points, players(name, position, nfl_team)")
-    .eq("season", params.season)
-    .eq("scoring", params.scoring)
-    .in("week", weeks)
-    .order("proj_points", { ascending: false });
+  for (const r of rostered ?? []) {
+    if (r.fp_player_id) rosteredFp.add(String(r.fp_player_id));
+    if (r.player_name) rosteredNames.add(normalizePlayerName(String(r.player_name)));
+    if (r.espn_player_id != null) espnIds.push(Number(r.espn_player_id));
+  }
+
+  if (espnIds.length > 0) {
+    const { data: mapped } = await supabase
+      .from("player_id_map")
+      .select("fp_player_id")
+      .in("espn_player_id", espnIds);
+    for (const m of mapped ?? []) {
+      if (m.fp_player_id) rosteredFp.add(String(m.fp_player_id));
+    }
+  }
+
+  const projectionWeek =
+    params.week != null && params.week > 0 ? params.week : null;
+  const fetchLimit = Math.max((params.limit ?? 100) * 3, 200);
 
   type ProjRow = {
     fp_player_id: string;
@@ -154,39 +184,57 @@ export async function fetchFreeAgents(params: {
       | null;
   };
 
-  const byId = new Map<
-    string,
-    {
-      fpPlayerId: string;
-      name: string;
-      position: string;
-      nflTeam: string | null;
-      weekProj: number | null;
-      rosProj: number | null;
-    }
-  >();
+  const loadWeek = async (week: number) => {
+    const { data } = await supabase
+      .from("player_projections_weekly")
+      .select("fp_player_id, week, proj_points, players(name, position, nfl_team)")
+      .eq("season", params.season)
+      .eq("scoring", params.scoring)
+      .eq("week", week)
+      .not("proj_points", "is", null)
+      .order("proj_points", { ascending: false })
+      .limit(fetchLimit);
+    return (data ?? []) as ProjRow[];
+  };
 
-  for (const row of (projs ?? []) as ProjRow[]) {
-    if (rosteredFp.has(row.fp_player_id)) continue;
-    const player = Array.isArray(row.players) ? row.players[0] : row.players;
-    if (!player) continue;
-    const cur = byId.get(row.fp_player_id) ?? {
-      fpPlayerId: row.fp_player_id,
-      name: player.name,
-      position: player.position,
-      nflTeam: player.nfl_team,
-      weekProj: null,
-      rosProj: null,
-    };
-    if (row.week === 0) cur.rosProj = row.proj_points;
-    else cur.weekProj = row.proj_points;
-    byId.set(row.fp_player_id, cur);
-  }
+  const [weeklyRows, rosRows] = await Promise.all([
+    projectionWeek != null ? loadWeek(projectionWeek) : Promise.resolve([] as ProjRow[]),
+    loadWeek(0),
+  ]);
+
+  const byId = new Map<string, FreeAgentRow>();
+
+  const ingest = (rows: ProjRow[], kind: "week" | "ros") => {
+    for (const row of rows) {
+      if (rosteredFp.has(row.fp_player_id)) continue;
+      const player = Array.isArray(row.players) ? row.players[0] : row.players;
+      if (!player) continue;
+      if (rosteredNames.has(normalizePlayerName(player.name))) continue;
+
+      const cur = byId.get(row.fp_player_id) ?? {
+        fpPlayerId: row.fp_player_id,
+        name: player.name,
+        position: player.position,
+        nflTeam: player.nfl_team,
+        weekProj: null,
+        rosProj: null,
+        projectionWeek,
+        source: "fantasypros" as const,
+      };
+      if (kind === "ros") cur.rosProj = row.proj_points;
+      else cur.weekProj = row.proj_points;
+      byId.set(row.fp_player_id, cur);
+    }
+  };
+
+  ingest(rosRows, "ros");
+  if (weeklyRows.length > 0) ingest(weeklyRows, "week");
 
   const list = [...byId.values()];
-  list.sort(
-    (a, b) =>
-      (b.weekProj ?? b.rosProj ?? 0) - (a.weekProj ?? a.rosProj ?? 0),
-  );
+  list.sort((a, b) => {
+    const aScore = a.weekProj ?? a.rosProj ?? 0;
+    const bScore = b.weekProj ?? b.rosProj ?? 0;
+    return bScore - aScore;
+  });
   return list.slice(0, params.limit ?? 100);
 }

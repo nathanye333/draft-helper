@@ -103,6 +103,7 @@ describe("rankWaiverTargets", () => {
           nflTeam: "BUF",
           weekProj: 12,
           rosProj: 100,
+          projectionWeek: 1,
         },
         {
           fpPlayerId: "b",
@@ -111,6 +112,7 @@ describe("rankWaiverTargets", () => {
           nflTeam: "KC",
           weekProj: 20,
           rosProj: 300,
+          projectionWeek: 1,
         },
       ],
       yourRoster,
@@ -118,5 +120,7 @@ describe("rankWaiverTargets", () => {
       limit: 5,
     });
     expect(targets[0]?.position).toBe("WR");
+    expect(targets[0]?.rationale).toContain("FP W1");
+    expect(targets[0]?.rationale).toContain("FP ROS");
   });
 });

@@ -8,6 +8,8 @@ export interface FreeAgentCandidate {
   nflTeam: string | null;
   weekProj: number | null;
   rosProj: number | null;
+  /** NFL week for weekProj (FantasyPros); null if only ROS loaded. */
+  projectionWeek?: number | null;
 }
 
 export interface WaiverTarget extends FreeAgentCandidate {
@@ -27,15 +29,21 @@ export function rankWaiverTargets(params: {
 
   const scored = params.freeAgents.map((fa) => {
     const needScore = need[fa.position] ?? 0;
-    const week = fa.weekProj ?? 0;
+    const weekPts = fa.weekProj ?? 0;
     const ros = fa.rosProj ?? 0;
     // Prefer weekly upside when need is high; still reward ROS.
-    const score = week * 1.2 + ros * 0.05 + needScore * 8;
+    const score = weekPts * 1.2 + ros * 0.05 + needScore * 8;
+    const weekLabel =
+      fa.weekProj != null
+        ? fa.projectionWeek != null
+          ? `FP W${fa.projectionWeek} ${fa.weekProj.toFixed(1)}`
+          : `FP week ${fa.weekProj.toFixed(1)}`
+        : "No FP week proj";
     const rationaleParts = [
-      fa.weekProj != null ? `Week ${fa.weekProj.toFixed(1)}` : "No week proj",
-      fa.rosProj != null ? `ROS ${fa.rosProj.toFixed(1)}` : "No ROS",
+      weekLabel,
+      fa.rosProj != null ? `FP ROS ${fa.rosProj.toFixed(1)}` : "No FP ROS",
     ];
-    if (needScore > 0) rationaleParts.push(`fills ${fa.position} need (${needScore})`);
+    if (needScore > 0) rationaleParts.push(`fills ${fa.position} need`);
     return {
       ...fa,
       score,
