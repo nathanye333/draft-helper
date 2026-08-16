@@ -25,7 +25,7 @@ Vercel + Supabase Cloud in production.
 
 ```
 app/
-  page.tsx                     # Dashboard: list drafts, create new
+  page.tsx                     # Hub: season leagues + drafts
   login/                       # Google OAuth (+ optional email/password)
   auth/callback/               # Supabase auth code exchange (OAuth PKCE)
   drafts/new/                  # Setup wizard (client)
@@ -33,18 +33,24 @@ app/
   drafts/[id]/page.tsx         # Live draft room (+ draft agent chat)
   drafts/[id]/board/           # Full draft board grid
   drafts/[id]/analysis/        # Reach/steal leaderboard, scarcity, recs
+  leagues/                     # ESPN season advisor (list, connect, overview)
+  leagues/[id]/start-sit|trades|waivers|news/
   api/rankings/sync/route.ts   # FantasyPros sync endpoint
   api/drafts/[id]/chat/        # LangChain draft agent (BYOK)
+  api/leagues/[id]/chat/       # LangChain season agent (BYOK)
   actions/draft.ts             # Server actions: createDraft, logPick, undo, ...
+  actions/league.ts            # Connect ESPN, sync, projections refresh
 lib/
   supabase/                    # Browser/server/admin Supabase clients + types
   draft/                       # Snake order, slot assignment, data loading
-  analytics/                   # ADP delta/reach classification, scarcity, recs
-  agent/                       # LangChain model + read-only analysis tools
+  league/                      # Season league bundle + free agents
+  espn/                        # Unofficial ESPN fantasy client + sync
+  analytics/                   # ADP, scarcity, recs, start-sit, trade, waivers
+  agent/                       # LangChain model + draft/league tools
   fantasypros/                 # FantasyPros API client + sync logic
 components/
   ui/                          # Button, Input, Card, Badge, Select, Label
-  draft-room/, analysis/, setup-wizard/
+  draft-room/, analysis/, setup-wizard/, league/
 supabase/
   migrations/                  # SQL schema + RLS policies
 ```
@@ -181,9 +187,19 @@ npm run lint
 
 - Auction drafts (schema has a `draft_type` column reserved for this)
 - Multi-user collaborative draft rooms without auth
-- Sleeper/ESPN live import — picks are entered manually
 - Dynasty/rookie-specific rankings
 - Player headshots (FantasyPros image licensing)
-- Streaming agent tokens / persisted chat history
 - Agent write tools (log/undo picks)
 - Production Ollama through Vercel (use local `next dev` for Ollama)
+- Chrome extension for ESPN cookie capture (paste SWID / espn_s2 instead)
+- Full news triage product (wrapper page ships under `/leagues/[id]/news`)
+
+## Season Advisor (ESPN)
+
+Connect an ESPN league under **Leagues** / `/leagues/new` by pasting `leagueId`,
+`SWID`, and `espn_s2`. Rosters sync from ESPN’s unofficial fantasy API; weekly and
+ROS projections sync from FantasyPros into `player_projections_weekly`. Feature
+pages: Start/Sit, Trades, Waivers, plus a News wrapper. Season agent chat is
+available on league pages (BYOK / Ollama like the draft agent).
+
+Apply the season migration locally with `npx supabase db reset` (or `db push`).

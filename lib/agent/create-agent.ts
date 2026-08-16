@@ -2,6 +2,7 @@ import { createAgent, HumanMessage, AIMessage, ToolMessage } from "langchain";
 import type { BaseMessage } from "@langchain/core/messages";
 import { createChatModel, type LlmConfig } from "@/lib/agent/model";
 import { createDraftTools } from "@/lib/agent/tools";
+import { createLeagueTools } from "@/lib/agent/league-tools";
 import type { DraftAgentStreamEvent } from "@/lib/agent/stream-types";
 
 export type { DraftAgentStreamEvent } from "@/lib/agent/stream-types";
@@ -120,6 +121,27 @@ function createAgentForDraft(draftId: string, llm: LlmConfig) {
     model: createChatModel(llm),
     tools: createDraftTools(draftId),
     systemPrompt: systemPrompt(draftId),
+  });
+}
+
+function leagueSystemPrompt(leagueId: string): string {
+  return [
+    "You are a fantasy football season advisor for this user's ESPN-synced league.",
+    `League id: ${leagueId}.`,
+    "Rosters come from ESPN sync; projections from FantasyPros cached in Postgres — use tools, do not invent numbers.",
+    "Be decisive: call tools and give a clear recommendation in one reply.",
+    "Do not ask follow-up questions or menus. State short assumptions and proceed.",
+    "Use suggest_start_sit for lineup, evaluate_trade for trades, waiver_targets for FA/waivers.",
+    "Use web_search only for news/injuries outside cached data.",
+    "Cite week/ROS projection numbers from tools. You are read-only.",
+  ].join(" ");
+}
+
+function createAgentForLeague(leagueId: string, llm: LlmConfig) {
+  return createAgent({
+    model: createChatModel(llm),
+    tools: createLeagueTools(leagueId),
+    systemPrompt: leagueSystemPrompt(leagueId),
   });
 }
 
@@ -305,6 +327,126 @@ export async function* streamDraftChatAgent(params: {
       }
       const message = err instanceof Error ? err.message : "Agent failed";
       console.error("[draft-agent] stream failed:", message);
+      queue.push({ type: "error", message });
+      queue.push({ type: "done" });
+      queue.close();
+    });
+
+  try {
+    for await (const event of queue.iterate()) {
+      yield event;
+    }
+  } finally {
+    await finished;
+  }
+}
+
+export async function* streamLeagueChatAgent(params: {
+  leagueId: string;
+  messages: ChatTurn[];
+  llm: LlmConfig;
+  signal?: AbortSignal;
+}): AsyncGenerator<DraftAgentStreamEvent> {
+  if (params.signal?.aborted) {
+    yield { type: "done", stopped: true };
+    return;
+  }
+
+  const agent = createAgentForLeague(params.leagueId, params.llm);
+  const queue = createEventQueue<DraftAgentStreamEvent>();
+
+  const runPromise = (async () => {
+    const run = await agent.streamEvents(
+      { messages: toLangChainMessages(params.messages) },
+      { version: "v3", signal: params.signal },
+    );
+
+    const messagePump = (async () => {
+      for await (const msg of run.messages) {
+        if (params.signal?.aborted) return;
+
+        const reasoningTask = (async () => {
+          try {
+            for await (const delta of msg.reasoning) {
+              if (params.signal?.aborted) return;
+              if (delta) queue.push({ type: "reasoning", delta });
+            }
+          } catch {
+            // Some models have no reasoning channel.
+          }
+        })();
+
+        try {
+          for await (const delta of msg.text) {
+            if (params.signal?.aborted) return;
+            if (delta) queue.push({ type: "token", delta });
+          }
+        } catch (err) {
+          if (!params.signal?.aborted) {
+            throw err instanceof Error ? err : new Error(String(err));
+          }
+        }
+
+        await reasoningTask;
+      }
+    })();
+
+    const toolPump = (async () => {
+      for await (const call of run.toolCalls) {
+        if (params.signal?.aborted) return;
+        const id = call.callId || `${call.name}-${Date.now()}`;
+        queue.push({
+          type: "tool_start",
+          id,
+          name: call.name,
+          input: call.input ?? null,
+        });
+        try {
+          const [output, status, error] = await Promise.all([
+            call.output.catch(() => undefined),
+            call.status.catch(() => "error" as const),
+            call.error.catch(() => undefined),
+          ]);
+          const text =
+            toolOutputToString(output, error) ||
+            (status === "error" ? "Tool failed" : "");
+          queue.push({
+            type: "tool_end",
+            id,
+            name: call.name,
+            output: text,
+          });
+        } catch (err) {
+          queue.push({
+            type: "tool_end",
+            id,
+            name: call.name,
+            output: err instanceof Error ? err.message : "Tool failed",
+          });
+        }
+      }
+    })();
+
+    const settled = await Promise.allSettled([messagePump, toolPump, run.output]);
+    const firstReject = settled.find((r) => r.status === "rejected");
+    if (firstReject && firstReject.status === "rejected") {
+      throw firstReject.reason;
+    }
+  })();
+
+  const finished = runPromise
+    .then(() => {
+      queue.push({ type: "done", stopped: Boolean(params.signal?.aborted) });
+      queue.close();
+    })
+    .catch((err) => {
+      if (params.signal?.aborted) {
+        queue.push({ type: "done", stopped: true });
+        queue.close();
+        return;
+      }
+      const message = err instanceof Error ? err.message : "Agent failed";
+      console.error("[league-agent] stream failed:", message);
       queue.push({ type: "error", message });
       queue.push({ type: "done" });
       queue.close();

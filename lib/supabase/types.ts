@@ -92,3 +92,85 @@ export const DEFAULT_ROSTER_SLOTS: { slot_type: SlotType; count: number; sort_or
   { slot_type: "DST", count: 1, sort_order: 6 },
   { slot_type: "BENCH", count: 6, sort_order: 7 },
 ];
+
+export type LeagueSource = "espn";
+
+export interface League {
+  id: string;
+  user_id: string;
+  name: string;
+  season: number;
+  source: LeagueSource;
+  scoring: ScoringFormat;
+  espn_league_id: string;
+  my_espn_team_id: number | null;
+  current_week: number | null;
+  settings: LeagueSettings;
+  last_synced_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface LeagueSettings {
+  rosterSlots?: { slot_type: SlotType; count: number }[];
+  name?: string;
+  [key: string]: unknown;
+}
+
+export interface LeagueTeam {
+  id: string;
+  league_id: string;
+  espn_team_id: number;
+  name: string;
+  abbrev: string | null;
+  wins: number;
+  losses: number;
+  ties: number;
+  points_for: number | null;
+  points_against: number | null;
+  playoff_seed: number | null;
+  is_user_team: boolean;
+  created_at: string;
+}
+
+export interface LeagueRosterEntry {
+  id: string;
+  league_id: string;
+  espn_team_id: number;
+  espn_player_id: number;
+  player_name: string;
+  position: Position | string;
+  nfl_team: string | null;
+  lineup_slot: string;
+  injury_status: string | null;
+  fp_player_id: string | null;
+  updated_at: string;
+}
+
+export interface LeagueMatchup {
+  id: string;
+  league_id: string;
+  week: number;
+  home_espn_team_id: number;
+  away_espn_team_id: number;
+  home_points: number | null;
+  away_points: number | null;
+}
+
+export interface PlayerIdMap {
+  espn_player_id: number;
+  fp_player_id: string;
+  player_name: string | null;
+  updated_at: string;
+}
+
+export interface PlayerProjectionWeekly {
+  id: string;
+  fp_player_id: string;
+  season: number;
+  week: number;
+  scoring: ScoringFormat;
+  proj_points: number | null;
+  proj_stats: Record<string, number> | null;
+  synced_at: string;
+}

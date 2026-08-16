@@ -14,8 +14,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Fantasy Draft Helper",
-  description: "Live fantasy football snake draft assistant with ADP/ECR value tracking.",
+  title: "Fantasy Helper",
+  description:
+    "Fantasy football draft assistant and ESPN season advisor with AI start/sit, trades, and waivers.",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

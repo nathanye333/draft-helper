@@ -5,7 +5,8 @@ import { buttonVariants } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { DeleteDraftButton } from "@/components/draft-list/delete-draft-button";
-import type { Draft } from "@/lib/supabase/types";
+import { DeleteLeagueButton } from "@/components/league/delete-league-button";
+import type { Draft, League } from "@/lib/supabase/types";
 
 const STATUS_VARIANT: Record<Draft["status"], "default" | "success" | "warning"> = {
   setup: "warning",
@@ -27,46 +28,98 @@ export default async function DashboardPage() {
     redirect("/login");
   }
 
-  const { data: drafts } = await supabase
-    .from("drafts")
-    .select("*")
-    .order("created_at", { ascending: false });
+  const [{ data: drafts }, { data: leagues }] = await Promise.all([
+    supabase.from("drafts").select("*").order("created_at", { ascending: false }),
+    supabase.from("leagues").select("*").order("updated_at", { ascending: false }),
+  ]);
 
   return (
     <div className="mx-auto max-w-3xl px-4 py-10">
-      <div className="mb-6 flex items-center justify-between">
-        <h1 className="text-2xl font-semibold">Your drafts</h1>
-        <Link href="/drafts/new" className={buttonVariants()}>
-          New draft
-        </Link>
+      <div className="mb-10">
+        <h1 className="text-2xl font-semibold">Fantasy helper</h1>
+        <p className="mt-1 text-sm text-slate-400">
+          Draft night tools and season-long ESPN advisor
+        </p>
+        <div className="mt-4 flex flex-wrap gap-2">
+          <Link href="/drafts/new" className={buttonVariants()}>
+            New draft
+          </Link>
+          <Link href="/leagues/new" className={buttonVariants({ variant: "secondary" })}>
+            Connect ESPN league
+          </Link>
+          <Link href="/leagues" className={buttonVariants({ variant: "ghost" })}>
+            All leagues
+          </Link>
+        </div>
       </div>
 
-      {!drafts || drafts.length === 0 ? (
-        <Card>
-          <CardContent className="py-10 text-center text-sm text-slate-400">
-            No drafts yet. Create one to configure your league and sync rankings.
-          </CardContent>
-        </Card>
-      ) : (
-        <div className="flex flex-col gap-3">
-          {(drafts as Draft[]).map((draft) => (
-            <Card key={draft.id} className="transition-colors hover:border-slate-700">
-              <CardHeader className="flex-row items-center justify-between gap-3">
-                <Link href={STATUS_HREF[draft.status](draft.id)} className="min-w-0 flex-1">
-                  <CardTitle>{draft.name}</CardTitle>
-                  <p className="text-sm text-slate-400">
-                    {draft.season} · {draft.num_teams} teams · {draft.scoring}
-                  </p>
-                </Link>
-                <div className="flex shrink-0 items-center gap-2">
-                  <Badge variant={STATUS_VARIANT[draft.status]}>{draft.status}</Badge>
-                  <DeleteDraftButton draftId={draft.id} draftName={draft.name} />
-                </div>
-              </CardHeader>
-            </Card>
-          ))}
+      <section className="mb-10">
+        <div className="mb-4 flex items-center justify-between">
+          <h2 className="text-lg font-medium">Season leagues</h2>
+          <Link href="/leagues" className="text-sm text-slate-400 hover:text-slate-200">
+            View all
+          </Link>
         </div>
-      )}
+        {!leagues || leagues.length === 0 ? (
+          <Card>
+            <CardContent className="py-8 text-center text-sm text-slate-400">
+              No ESPN leagues yet. Connect with SWID / espn_s2 cookies.
+            </CardContent>
+          </Card>
+        ) : (
+          <div className="flex flex-col gap-3">
+            {(leagues as League[]).slice(0, 5).map((league) => (
+              <Card key={league.id} className="transition-colors hover:border-slate-700">
+                <CardHeader className="flex-row items-center justify-between gap-3">
+                  <Link href={`/leagues/${league.id}`} className="min-w-0 flex-1">
+                    <CardTitle>{league.name}</CardTitle>
+                    <p className="text-sm text-slate-400">
+                      {league.season} · {league.scoring}
+                      {league.current_week != null ? ` · Week ${league.current_week}` : ""}
+                    </p>
+                  </Link>
+                  <DeleteLeagueButton leagueId={league.id} leagueName={league.name} />
+                </CardHeader>
+              </Card>
+            ))}
+          </div>
+        )}
+      </section>
+
+      <section>
+        <div className="mb-4 flex items-center justify-between">
+          <h2 className="text-lg font-medium">Drafts</h2>
+          <Link href="/drafts/new" className="text-sm text-slate-400 hover:text-slate-200">
+            New draft
+          </Link>
+        </div>
+        {!drafts || drafts.length === 0 ? (
+          <Card>
+            <CardContent className="py-8 text-center text-sm text-slate-400">
+              No drafts yet. Create one to configure your league and sync rankings.
+            </CardContent>
+          </Card>
+        ) : (
+          <div className="flex flex-col gap-3">
+            {(drafts as Draft[]).map((draft) => (
+              <Card key={draft.id} className="transition-colors hover:border-slate-700">
+                <CardHeader className="flex-row items-center justify-between gap-3">
+                  <Link href={STATUS_HREF[draft.status](draft.id)} className="min-w-0 flex-1">
+                    <CardTitle>{draft.name}</CardTitle>
+                    <p className="text-sm text-slate-400">
+                      {draft.season} · {draft.num_teams} teams · {draft.scoring}
+                    </p>
+                  </Link>
+                  <div className="flex shrink-0 items-center gap-2">
+                    <Badge variant={STATUS_VARIANT[draft.status]}>{draft.status}</Badge>
+                    <DeleteDraftButton draftId={draft.id} draftName={draft.name} />
+                  </div>
+                </CardHeader>
+              </Card>
+            ))}
+          </div>
+        )}
+      </section>
     </div>
   );
 }

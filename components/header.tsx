@@ -10,10 +10,16 @@ export async function Header() {
     <header className="border-b border-slate-800 bg-slate-950">
       <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-3">
         <Link href="/" className="text-sm font-semibold text-slate-100">
-          Fantasy Draft Helper
+          Fantasy Helper
         </Link>
         {data.user ? (
           <div className="flex items-center gap-3">
+            <Link href="/leagues" className="text-xs text-slate-400 hover:text-slate-200">
+              Leagues
+            </Link>
+            <Link href="/" className="text-xs text-slate-400 hover:text-slate-200">
+              Drafts
+            </Link>
             <span className="text-xs text-slate-500">{data.user.email}</span>
             <SignOutButton />
           </div>
