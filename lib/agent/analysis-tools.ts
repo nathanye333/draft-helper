@@ -1,6 +1,7 @@
 import { tool } from "langchain";
 import { z } from "zod";
 import {
+  analysisBaseSchemaText,
   createAnalysisWorkspace,
   type AnalysisWorkspace,
 } from "@/lib/agent/analysis-workspace";
@@ -12,6 +13,8 @@ function json(data: unknown): string {
 /**
  * Free-form SQL + CSV scratchpad tools for the season agent.
  * Workspace is shared across tool calls within one agent request.
+ * analysis_sql / analysis_write_csv stay gated until analysis_schema runs
+ * (see createAnalysisSchemaMiddleware).
  */
 export function createAnalysisWorkspaceTools(leagueId: string) {
   const workspace: AnalysisWorkspace = createAnalysisWorkspace(leagueId);
@@ -21,6 +24,7 @@ export function createAnalysisWorkspaceTools(leagueId: string) {
       await workspace.ensureReady();
       return json({
         help: workspace.schemaHelp(),
+        schema: analysisBaseSchemaText(),
         tables: workspace.listTables(),
         files: workspace.listFiles(),
       });
@@ -28,7 +32,7 @@ export function createAnalysisWorkspaceTools(leagueId: string) {
     {
       name: "analysis_schema",
       description:
-        "List analysis workspace tables/files and schema help. Call before free-form SQL.",
+        "Load analysis workspace schema (required before analysis_sql). Returns tables, columns, and files.",
       schema: z.object({}),
     },
   );
@@ -40,7 +44,8 @@ export function createAnalysisWorkspaceTools(leagueId: string) {
     },
     {
       name: "analysis_describe_table",
-      description: "Show columns for an analysis workspace table.",
+      description:
+        "Show columns for one analysis workspace table (also unlocks analysis_sql).",
       schema: z.object({
         table: z.string().min(1).max(80),
       }),
@@ -56,13 +61,15 @@ export function createAnalysisWorkspaceTools(leagueId: string) {
       } catch (err) {
         return json({
           error: err instanceof Error ? err.message : "SQL failed",
+          schema: analysisBaseSchemaText(),
+          hint: "Fix SQL using the schema above; do not invent identifiers.",
         });
       }
     },
     {
       name: "analysis_sql",
       description:
-        "Run one SQL statement in the in-memory analysis DB (SELECT/WITH, CREATE scratch_* TABLE AS, INSERT/DELETE/DROP on scratch_* only). Use for any custom stat — e.g. defense vs RBs normalized by those RBs' season averages. Max ~200 rows returned for SELECT.",
+        "Run one SQLite statement (SELECT/WITH, or CREATE/INSERT/DELETE/DROP on scratch_*/tmp_* only). Available only after analysis_schema. Max ~200 rows for SELECT.",
       schema: z.object({
         sql: z.string().min(1).max(12000),
       }),
@@ -75,13 +82,16 @@ export function createAnalysisWorkspaceTools(leagueId: string) {
       try {
         return json(workspace.writeCsvFromSql(input.fileName, input.sql));
       } catch (err) {
-        return json({ error: err instanceof Error ? err.message : "write_csv failed" });
+        return json({
+          error: err instanceof Error ? err.message : "write_csv failed",
+          schema: analysisBaseSchemaText(),
+        });
       }
     },
     {
       name: "analysis_write_csv",
       description:
-        "Run a SELECT and save results to a scratch CSV file in the workspace (for chaining analyses).",
+        "SELECT into a scratch CSV (available after analysis_schema). For chaining analyses.",
       schema: z.object({
         fileName: z.string().min(1).max(80).describe("Must end with .csv"),
         sql: z.string().min(1).max(12000),

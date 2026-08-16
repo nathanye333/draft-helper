@@ -3,6 +3,7 @@ import type { BaseMessage } from "@langchain/core/messages";
 import { createChatModel, type LlmConfig } from "@/lib/agent/model";
 import { createDraftTools } from "@/lib/agent/tools";
 import { createLeagueTools } from "@/lib/agent/league-tools";
+import { createAnalysisSchemaMiddleware } from "@/lib/agent/analysis-schema-context";
 import type { DraftAgentStreamEvent } from "@/lib/agent/stream-types";
 import type { WorkingLineupEntry } from "@/lib/league/working-lineup";
 
@@ -139,9 +140,9 @@ function leagueSystemPrompt(
     "Be decisive: call tools and give a clear recommendation in one reply.",
     "Do not ask follow-up questions or menus. State short assumptions and proceed.",
     "Use get_my_roster for the current lineup (sandbox if the user rearranged Start/Sit), suggest_start_sit for the algorithmic recommendation, evaluate_trade for trades, waiver_targets for FA/waivers, player_consistency for single-player weekly variance.",
-    "For novel/complex stats use the analysis workspace: analysis_schema then analysis_sql (SQLite) with base tables nfl_player_weeks, season_players, defense_vs_position, etc. Create scratch_* tables or CSVs (analysis_write_csv / analysis_load_csv) as a scratchpad — do not invent numbers.",
-    "Use analyze_season_players for quick filter/sort or simple compute exprs; prefer analysis_sql when you need joins/group-bys/normalization.",
-    "Use query_defense_matchups / get_player_matchup for quick D-vs-pos lookups; use analysis_sql on nfl_player_weeks when you need custom normalizations (e.g. pts allowed vs those RBs' own season averages).",
+    "For novel/complex stats: call analysis_schema first (unlocks analysis_sql; schema is in that tool result — do not invent identifiers). Use scratch_* tables or CSVs as a scratchpad.",
+    "Use analyze_season_players for quick filter/sort or simple compute exprs; prefer analysis_sql only after analysis_schema when you need joins/group-bys/normalization.",
+    "Use query_defense_matchups / get_player_matchup for quick D-vs-pos lookups; use analysis_sql (after analysis_schema) for custom normalizations.",
     "Use query_players / get_player / compare_players / find_value_plays on the shared rankings board for ADP/ECR/projection analysis; availableOnly means unrostered in this league.",
     "Use web_search only for news/injuries outside cached data.",
     "Cite week/ROS/ADP/ECR, consistency (σ, CV, mean/σ), and matchup numbers from tools. You are read-only — lineup sandbox changes are temporary and not saved to ESPN.",
@@ -168,6 +169,7 @@ function createAgentForLeague(
     model: createChatModel(llm),
     tools: createLeagueTools(leagueId, { workingLineup }),
     systemPrompt: leagueSystemPrompt(leagueId, workingLineup),
+    middleware: [createAnalysisSchemaMiddleware()],
   });
 }
 

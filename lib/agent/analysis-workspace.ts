@@ -604,6 +604,19 @@ export function createAnalysisWorkspace(leagueId: string): AnalysisWorkspace {
   return api;
 }
 
+/** Compact DDL for model context — only inject when SQL tools are unlocked. */
+export function analysisBaseSchemaText(): string {
+  return [
+    "season_players(espn_player_id, name, position, nfl_team, fantasy_team, available, games, mean, stdev, cv, consistency_score, floor, ceiling, boom_rate, bust_rate, week_proj, ros_proj)",
+    "espn_week_points(espn_player_id, season, week, actual_points, projected_points)",
+    "league_rosters(espn_player_id, player_name, position, nfl_team, espn_team_id, fantasy_team, lineup_slot, fp_player_id, is_my_team)",
+    "defense_vs_position(season, defense_team, position, games, fant_pts_avg, fant_pts_ppr_avg, fant_pts_rank, rush_att, rush_yds, rush_ypc, rush_ypc_vs_avg, pass_att, pass_yds, pass_ypa, targets, receptions, rec_yds)",
+    "nfl_player_weeks(season, week, player_id, player_name, position, team, opponent_team, fantasy_points, fantasy_points_ppr, carries, rushing_yards, rushing_tds, targets, receptions, receiving_yards, receiving_tds, attempts, passing_yards, passing_tds)",
+    "schedule_games(season, week, game_type, home_team, away_team, gameday)",
+    "Rules: SQLite; one statement; SELECT/WITH ok; CREATE/INSERT/DELETE/DROP only on scratch_* or tmp_*.",
+  ].join("\n");
+}
+
 /** Optional: verify wasm file exists at build/dev time. */
 export function sqlJsWasmPath(): string {
   return path.join(process.cwd(), "node_modules", "sql.js", "dist", "sql-wasm.wasm");
