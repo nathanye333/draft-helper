@@ -1,4 +1,5 @@
 import { createClient } from "@/lib/supabase/server";
+import { resolveEspnImageUrl } from "@/lib/espn/player-universe";
 import type {
   EspnPlayer,
   EspnPlayerWeekPoints,
@@ -62,8 +63,22 @@ export async function fetchPlayerCard(
       name: roster.player_name,
       position: roster.position,
       nfl_team: roster.nfl_team,
-      headshot_url: `https://a.espncdn.com/combiner/i?img=/i/headshots/nfl/players/full/${espnPlayerId}.png&w=350&h=254`,
+      headshot_url: resolveEspnImageUrl({
+        espnPlayerId,
+        position: roster.position,
+        nflTeam: roster.nfl_team,
+      }),
       updated_at: new Date().toISOString(),
+    };
+  } else {
+    resolvedPlayer = {
+      ...resolvedPlayer,
+      headshot_url: resolveEspnImageUrl({
+        espnPlayerId,
+        position: resolvedPlayer.position,
+        nflTeam: resolvedPlayer.nfl_team,
+        storedUrl: resolvedPlayer.headshot_url,
+      }),
     };
   }
 
@@ -144,7 +159,7 @@ export async function fetchTeamRosterPage(leagueId: string, espnTeamId: number) 
       .eq("league_id", leagueId)
       .eq("espn_team_id", espnTeamId)
       .maybeSingle(),
-    supabase.from("leagues").select("current_week").eq("id", leagueId).single(),
+    supabase.from("leagues").select("current_week, season, scoring").eq("id", leagueId).single(),
   ]);
   if (!team) return null;
 
@@ -173,26 +188,54 @@ export async function fetchTeamRosterPage(leagueId: string, espnTeamId: number) 
     (espnPlayers ?? []).map((p) => [p.espn_player_id as number, p.headshot_url as string | null]),
   );
 
+  const players = (roster ?? []).map((r) => {
+    const p = poolById.get(r.espn_player_id);
+    const position = r.position as string;
+    const nflTeam = r.nfl_team as string | null;
+    return {
+      espnPlayerId: r.espn_player_id as number,
+      name: r.player_name as string,
+      position,
+      nflTeam,
+      lineupSlot: r.lineup_slot as string,
+      injuryStatus: r.injury_status as string | null,
+      headshotUrl: resolveEspnImageUrl({
+        espnPlayerId: r.espn_player_id as number,
+        position,
+        nflTeam,
+        storedUrl: headshots.get(r.espn_player_id) ?? null,
+      }),
+      weekProjected: (p?.week_projected as number | null) ?? null,
+      weekActual: (p?.week_actual as number | null) ?? null,
+      seasonProjected: (p?.season_projected as number | null) ?? null,
+      seasonActual: (p?.season_actual as number | null) ?? null,
+      percentOwned: (p?.percent_owned as number | null) ?? null,
+      fpPlayerId: (r.fp_player_id as string | null) ?? (p?.fp_player_id as string | null) ?? null,
+    };
+  });
+
+  const week = league?.current_week && league.current_week > 0 ? league.current_week : 1;
+  const fpIds = players.map((p) => p.fpPlayerId).filter((id): id is string => !!id);
+  if (fpIds.length > 0 && league?.season && league?.scoring) {
+    const { data: projs } = await supabase
+      .from("player_projections_weekly")
+      .select("fp_player_id, proj_points")
+      .eq("season", league.season)
+      .eq("scoring", league.scoring)
+      .eq("week", week)
+      .in("fp_player_id", fpIds);
+    const byFp = new Map((projs ?? []).map((p) => [p.fp_player_id as string, p.proj_points as number]));
+    for (const p of players) {
+      if (p.weekProjected == null && p.fpPlayerId && byFp.has(p.fpPlayerId)) {
+        p.weekProjected = byFp.get(p.fpPlayerId) ?? null;
+      }
+    }
+  }
+
   return {
     team: team as LeagueTeam,
     currentWeek: (league?.current_week as number | null) ?? null,
-    players: (roster ?? []).map((r) => {
-      const p = poolById.get(r.espn_player_id);
-      return {
-        espnPlayerId: r.espn_player_id as number,
-        name: r.player_name as string,
-        position: r.position as string,
-        nflTeam: r.nfl_team as string | null,
-        lineupSlot: r.lineup_slot as string,
-        injuryStatus: r.injury_status as string | null,
-        headshotUrl: headshots.get(r.espn_player_id) ?? null,
-        weekProjected: (p?.week_projected as number | null) ?? null,
-        weekActual: (p?.week_actual as number | null) ?? null,
-        seasonProjected: (p?.season_projected as number | null) ?? null,
-        seasonActual: (p?.season_actual as number | null) ?? null,
-        percentOwned: (p?.percent_owned as number | null) ?? null,
-      };
-    }),
+    players,
   };
 }
 
@@ -220,12 +263,19 @@ export async function fetchWaiverPool(leagueId: string) {
 
   const players = ((rows ?? []) as Row[]).map((r) => {
     const ep = Array.isArray(r.espn_players) ? r.espn_players[0] : r.espn_players;
+    const position = ep?.position ?? "UNK";
+    const nflTeam = ep?.nfl_team ?? null;
     return {
       espnPlayerId: r.espn_player_id,
       name: ep?.name ?? `Player ${r.espn_player_id}`,
-      position: ep?.position ?? "UNK",
-      nflTeam: ep?.nfl_team ?? null,
-      headshotUrl: ep?.headshot_url ?? null,
+      position,
+      nflTeam,
+      headshotUrl: resolveEspnImageUrl({
+        espnPlayerId: r.espn_player_id,
+        position,
+        nflTeam,
+        storedUrl: ep?.headshot_url ?? null,
+      }),
       ownership: r.ownership,
       percentOwned: r.percent_owned,
       weekProjected: r.week_projected,
@@ -233,8 +283,28 @@ export async function fetchWaiverPool(leagueId: string) {
       seasonProjected: r.season_projected,
       seasonActual: r.season_actual,
       injuryStatus: r.injury_status,
+      fpPlayerId: r.fp_player_id,
     };
   });
+
+  // Fill missing ESPN week proj from FantasyPros when available.
+  const week = league?.current_week && league.current_week > 0 ? league.current_week : 1;
+  const fpIds = players.map((p) => p.fpPlayerId).filter((id): id is string => !!id);
+  if (fpIds.length > 0 && league?.season && league?.scoring) {
+    const { data: projs } = await supabase
+      .from("player_projections_weekly")
+      .select("fp_player_id, proj_points")
+      .eq("season", league.season)
+      .eq("scoring", league.scoring)
+      .eq("week", week)
+      .in("fp_player_id", fpIds);
+    const byFp = new Map((projs ?? []).map((p) => [p.fp_player_id as string, p.proj_points as number]));
+    for (const p of players) {
+      if (p.weekProjected == null && p.fpPlayerId && byFp.has(p.fpPlayerId)) {
+        p.weekProjected = byFp.get(p.fpPlayerId) ?? null;
+      }
+    }
+  }
 
   return {
     currentWeek: league?.current_week ?? null,

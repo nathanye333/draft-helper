@@ -48,11 +48,41 @@ const NFL_TEAM_ABBREV: Record<number, string> = {
   34: "HOU",
 };
 
-export function espnHeadshotUrl(espnPlayerId: number, position: string): string {
-  if (position === "DST") {
-    return `https://a.espncdn.com/i/teamlogos/nfl/500/scoreboard/default-team-logo-500.png`;
+/** ESPN CDN team logo for D/ST (fantasy uses the NFL team mark, not a player headshot). */
+export function espnDstLogoUrl(nflTeam: string | null | undefined): string {
+  const abbrev = (nflTeam ?? "").trim().toLowerCase();
+  if (!abbrev || abbrev === "fa") {
+    return "https://a.espncdn.com/i/teamlogos/nfl/500/scoreboard/default-team-logo-500.png";
   }
+  // ESPN scoreboard logos match fantasy D/ST art (kc, wsh, lar, jax, …).
+  return `https://a.espncdn.com/i/teamlogos/nfl/500/scoreboard/${abbrev}.png`;
+}
+
+export function espnHeadshotUrl(
+  espnPlayerId: number,
+  position: string,
+  nflTeam?: string | null,
+): string {
+  if (position === "DST") return espnDstLogoUrl(nflTeam);
   return `https://a.espncdn.com/combiner/i?img=/i/headshots/nfl/players/full/${espnPlayerId}.png&w=350&h=254`;
+}
+
+/** Prefer stored URL, but rebuild D/ST logos when sync stored the default placeholder. */
+export function resolveEspnImageUrl(params: {
+  espnPlayerId: number;
+  position: string;
+  nflTeam?: string | null;
+  storedUrl?: string | null;
+}): string {
+  const { espnPlayerId, position, nflTeam, storedUrl } = params;
+  if (position === "DST") {
+    const bad =
+      !storedUrl ||
+      storedUrl.includes("default-team-logo") ||
+      storedUrl.includes("/headshots/");
+    return bad ? espnDstLogoUrl(nflTeam) : storedUrl;
+  }
+  return storedUrl || espnHeadshotUrl(espnPlayerId, position, nflTeam);
 }
 
 function normalizeCookies(cookies: EspnCookies): { SWID: string; espn_s2: string } {
@@ -118,6 +148,25 @@ function mapOwnership(raw: string | undefined, onTeamId: number | null): EspnOwn
   return "FREEAGENT";
 }
 
+/**
+ * Parse ESPN stat id / externalId like:
+ * - 002026 / 102026 → season actual/projected (week 0)
+ * - 1120261 → week-1 projected (source=1, split=1, year=2026, week=1)
+ */
+function parseEspnStatId(
+  rawId: unknown,
+): { seasonId: number; week: number; statSourceId: number } | null {
+  const id = String(rawId ?? "");
+  const m = /^(0|1)([0-2])(\d{4})(\d*)$/.exec(id);
+  if (!m) return null;
+  const statSourceId = Number(m[1]);
+  const split = Number(m[2]);
+  const seasonId = Number(m[3]);
+  const week = split === 0 ? 0 : m[4] ? Number(m[4]) : 0;
+  if (!Number.isFinite(seasonId)) return null;
+  return { seasonId, week, statSourceId };
+}
+
 function parsePlayerStats(
   stats: unknown[] | undefined,
   seasons: number[],
@@ -127,9 +176,17 @@ function parsePlayerStats(
 
   for (const s of stats ?? []) {
     const row = s as Record<string, unknown>;
-    const scoringPeriodId = Number(row.scoringPeriodId ?? -1);
-    const statSourceId = Number(row.statSourceId ?? -1);
-    const seasonId = Number(row.seasonId ?? 0);
+    const fromId = parseEspnStatId(row.externalId ?? row.id);
+    let scoringPeriodId = Number(row.scoringPeriodId ?? -1);
+    let statSourceId = Number(row.statSourceId ?? -1);
+    let seasonId = Number(row.seasonId ?? 0);
+
+    if (fromId && (!seasons.includes(seasonId) || scoringPeriodId < 0 || statSourceId < 0)) {
+      seasonId = fromId.seasonId;
+      scoringPeriodId = fromId.week;
+      statSourceId = fromId.statSourceId;
+    }
+
     if (!seasons.includes(seasonId)) continue;
     if (scoringPeriodId < 0) continue;
     // 0 = actual, 1 = projected
@@ -164,12 +221,17 @@ export async function fetchEspnPlayerUniverse(params: {
 }): Promise<EspnPlayerUniverseRow[]> {
   const prior = params.season - 1;
   const seasons = [params.season, prior];
-  // Stat split ids: 00YEAR = season actual, 10YEAR = season projected.
+  // Prefer the league's current week; before kickoff ESPN often sits on week 1.
+  const scoringPeriod =
+    params.currentWeek != null && params.currentWeek > 0 ? params.currentWeek : 1;
+  // Stat ids: 00YEAR = season actual, 10YEAR = season projected,
+  // 11YEARWEEK = weekly projected (required — topPeriods alone won't include preseason week proj).
   const additionalValue = [
     `00${params.season}`,
     `10${params.season}`,
     `00${prior}`,
     `10${prior}`,
+    `11${params.season}${scoringPeriod}`,
   ];
   const topPeriods = 18;
 
@@ -177,7 +239,10 @@ export async function fetchEspnPlayerUniverse(params: {
   const json = (await espnFetchFiltered(
     path,
     params.cookies,
-    { view: "kona_player_info" },
+    {
+      view: "kona_player_info",
+      scoringPeriodId: String(scoringPeriod),
+    },
     {
       players: {
         limit: 2500,
@@ -207,16 +272,23 @@ export async function fetchEspnPlayerUniverse(params: {
     const name = String(player.fullName ?? `Player ${espnPlayerId}`);
     const nflTeam = NFL_TEAM_ABBREV[Number(player.proTeamId)] ?? null;
     const pointsBySeason = parsePlayerStats(player.stats as unknown[] | undefined, seasons);
+    const ownershipObj = player.ownership as { percentOwned?: number } | undefined;
+    const percentOwnedRaw =
+      ownershipObj?.percentOwned ??
+      (wrap.percentOwned != null ? Number(wrap.percentOwned) : null);
 
     out.push({
       espnPlayerId,
       name,
       position,
       nflTeam,
-      headshotUrl: espnHeadshotUrl(espnPlayerId, position),
+      headshotUrl: espnHeadshotUrl(espnPlayerId, position, nflTeam),
       ownership,
       espnTeamId: onTeamId,
-      percentOwned: wrap.percentOwned != null ? Number(wrap.percentOwned) : null,
+      percentOwned:
+        percentOwnedRaw != null && Number.isFinite(Number(percentOwnedRaw))
+          ? Number(percentOwnedRaw)
+          : null,
       injuryStatus: player.injuryStatus != null ? String(player.injuryStatus) : null,
       pointsBySeason,
     });
@@ -236,10 +308,20 @@ export function summaryFromUniverse(
 } {
   const weeks = row.pointsBySeason.get(season);
   const seasonTotal = weeks?.get(0);
-  const weekRow =
-    currentWeek != null && currentWeek > 0 ? weeks?.get(currentWeek) : undefined;
+  const targetWeek = currentWeek != null && currentWeek > 0 ? currentWeek : 1;
+  const weekRow = weeks?.get(targetWeek);
+  // If the requested week has no proj yet, fall back to the lowest positive week with a proj.
+  let weekProjected = weekRow?.projected ?? null;
+  if (weekProjected == null && weeks) {
+    for (const [w, pts] of [...weeks.entries()].sort((a, b) => a[0] - b[0])) {
+      if (w > 0 && pts.projected != null) {
+        weekProjected = pts.projected;
+        break;
+      }
+    }
+  }
   return {
-    weekProjected: weekRow?.projected ?? null,
+    weekProjected,
     weekActual: weekRow?.actual ?? null,
     seasonProjected: seasonTotal?.projected ?? null,
     seasonActual: seasonTotal?.actual ?? null,

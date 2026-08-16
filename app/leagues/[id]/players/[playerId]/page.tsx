@@ -31,8 +31,9 @@ export default async function PlayerCardPage({
 
   const { player, pool } = card;
   const headshot =
-    player.headshot_url ||
+    player.headshot_url ??
     `https://a.espncdn.com/combiner/i?img=/i/headshots/nfl/players/full/${espnPlayerId}.png&w=350&h=254`;
+  const weekProj = pool?.week_projected ?? card.fpWeekProj;
 
   const seasonAvg =
     pool?.season_projected != null ? pool.season_projected / 17 : null;
@@ -160,7 +161,7 @@ export default async function PlayerCardPage({
                   {league?.season ?? ""} Projected
                 </td>
                 <td className="px-3 py-2.5 text-right tabular-nums">
-                  {pool?.week_projected != null ? pool.week_projected.toFixed(1) : "—"}
+                  {weekProj != null ? weekProj.toFixed(1) : "—"}
                 </td>
                 <td className="px-3 py-2.5 text-right tabular-nums">
                   {pool?.season_projected != null ? pool.season_projected.toFixed(1) : "—"}

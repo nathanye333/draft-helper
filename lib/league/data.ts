@@ -43,7 +43,7 @@ export async function fetchLeagueBundle(leagueId: string): Promise<LeagueBundle 
   ]);
 
   const typedLeague = league as League;
-  const week = typedLeague.current_week && typedLeague.current_week > 0 ? typedLeague.current_week : null;
+  const week = typedLeague.current_week && typedLeague.current_week > 0 ? typedLeague.current_week : 1;
   const scoring = typedLeague.scoring as ScoringFormat;
 
   const fpIds = [
@@ -57,19 +57,18 @@ export async function fetchLeagueBundle(leagueId: string): Promise<LeagueBundle 
   const projectionsByFpId = new Map<string, { week: number | null; ros: number | null }>();
 
   if (fpIds.length > 0) {
-    const weeks = week != null ? [0, week] : [0];
     const { data: projs } = await supabase
       .from("player_projections_weekly")
       .select("fp_player_id, week, proj_points")
       .eq("season", typedLeague.season)
       .eq("scoring", scoring)
-      .in("week", weeks)
+      .in("week", [0, week])
       .in("fp_player_id", fpIds);
 
     for (const p of (projs ?? []) as Pick<PlayerProjectionWeekly, "fp_player_id" | "week" | "proj_points">[]) {
       const cur = projectionsByFpId.get(p.fp_player_id) ?? { week: null, ros: null };
       if (p.week === 0) cur.ros = p.proj_points;
-      else if (week != null && p.week === week) cur.week = p.proj_points;
+      else if (p.week === week) cur.week = p.proj_points;
       projectionsByFpId.set(p.fp_player_id, cur);
     }
   }

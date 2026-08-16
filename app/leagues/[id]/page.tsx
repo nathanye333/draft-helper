@@ -1,6 +1,7 @@
 import { notFound, redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { fetchLeagueBundle, userTeam } from "@/lib/league/data";
+import { resolveEspnImageUrl } from "@/lib/espn/player-universe";
 import { LeagueNav } from "@/components/league/league-nav";
 import { LeagueSyncButtons } from "@/components/league/league-sync-buttons";
 import { SeasonAgentSection } from "@/components/league/season-agent-section";
@@ -43,6 +44,10 @@ export default async function LeagueOverviewPage({
 
   const lineupPlayers = myRoster.map((r) => {
     const p = poolById.get(r.espn_player_id);
+    const fpWeek =
+      r.fp_player_id != null
+        ? (bundle.projectionsByFpId.get(r.fp_player_id)?.week ?? null)
+        : null;
     return {
       espnPlayerId: r.espn_player_id,
       name: r.player_name,
@@ -50,8 +55,13 @@ export default async function LeagueOverviewPage({
       nflTeam: r.nfl_team,
       lineupSlot: r.lineup_slot,
       injuryStatus: r.injury_status,
-      headshotUrl: headshots.get(r.espn_player_id) ?? null,
-      weekProjected: (p?.week_projected as number | null) ?? null,
+      headshotUrl: resolveEspnImageUrl({
+        espnPlayerId: r.espn_player_id,
+        position: r.position,
+        nflTeam: r.nfl_team,
+        storedUrl: headshots.get(r.espn_player_id) ?? null,
+      }),
+      weekProjected: (p?.week_projected as number | null) ?? fpWeek,
       weekActual: (p?.week_actual as number | null) ?? null,
       seasonProjected: (p?.season_projected as number | null) ?? null,
       seasonActual: (p?.season_actual as number | null) ?? null,

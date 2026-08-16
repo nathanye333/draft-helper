@@ -1,6 +1,7 @@
 import { notFound, redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { fetchLeagueBundle, rosterSlotsFromLeague, userTeam } from "@/lib/league/data";
+import { resolveEspnImageUrl } from "@/lib/espn/player-universe";
 import { suggestStartSit } from "@/lib/analytics/start-sit";
 import { LeagueNav } from "@/components/league/league-nav";
 import { SeasonAgentSection } from "@/components/league/season-agent-section";
@@ -48,16 +49,14 @@ export default async function StartSitPage({
   const weekProj = new Map<string, number | null>();
   for (const [fp, v] of bundle.projectionsByFpId) weekProj.set(fp, v.week);
 
-  // Prefer ESPN week proj from pool when present.
-  const espnWeekByFpOrEspn = new Map<string, number | null>();
+  // Prefer ESPN week proj from pool when present (keyed by FP id for the optimizer).
   for (const r of roster) {
     const p = poolById.get(r.espn_player_id);
     if (p?.week_projected != null && r.fp_player_id) {
-      espnWeekByFpOrEspn.set(r.fp_player_id, p.week_projected as number);
+      weekProj.set(r.fp_player_id, p.week_projected as number);
     }
   }
-  const mergedWeek = new Map(weekProj);
-  for (const [k, v] of espnWeekByFpOrEspn) mergedWeek.set(k, v);
+  const mergedWeek = weekProj;
 
   const suggestion = suggestStartSit({
     roster,
@@ -90,6 +89,7 @@ export default async function StartSitPage({
     const r = roster.find((x) => x.espn_player_id === espnPlayerId);
     if (!r) return null;
     const p = poolById.get(espnPlayerId);
+    const fpWeek = r.fp_player_id ? (mergedWeek.get(r.fp_player_id) ?? null) : null;
     return {
       espnPlayerId,
       name: r.player_name,
@@ -97,8 +97,14 @@ export default async function StartSitPage({
       nflTeam: r.nfl_team,
       lineupSlot,
       injuryStatus: r.injury_status,
-      headshotUrl: headshots.get(espnPlayerId) ?? null,
-      weekProjected: weekOverride ?? (p?.week_projected as number | null) ?? null,
+      headshotUrl: resolveEspnImageUrl({
+        espnPlayerId,
+        position: r.position,
+        nflTeam: r.nfl_team,
+        storedUrl: headshots.get(espnPlayerId) ?? null,
+      }),
+      weekProjected:
+        weekOverride ?? (p?.week_projected as number | null) ?? fpWeek ?? null,
       weekActual: (p?.week_actual as number | null) ?? null,
       seasonProjected: (p?.season_projected as number | null) ?? null,
       seasonActual: (p?.season_actual as number | null) ?? null,
