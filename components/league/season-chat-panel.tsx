@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import {
   DEFAULT_LLM_SETTINGS,
   getLlmSettingsSnapshot,
@@ -54,6 +54,7 @@ export function SeasonChatPanel({ leagueId }: { leagueId: string }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
+  const [hasServerOpenAiKey, setHasServerOpenAiKey] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -61,9 +62,37 @@ export function SeasonChatPanel({ leagueId }: { leagueId: string }) {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, busy]);
 
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetch("/api/llm/models");
+        const data = (await res.json()) as { ok?: boolean; hasServerOpenAiKey?: boolean };
+        if (!cancelled && data.ok) {
+          setHasServerOpenAiKey(Boolean(data.hasServerOpenAiKey));
+        }
+      } catch {
+        // ignore — send still works if server key resolves on the chat route
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const needsClientOpenAiKey =
+    settings.provider === "openai" && !settings.apiKey.trim() && !hasServerOpenAiKey;
+
+  const canSend = useMemo(() => {
+    if (!input.trim() || busy) return false;
+    if (!(settings.model.trim() || providerDefaults(settings.provider).model)) return false;
+    if (needsClientOpenAiKey) return false;
+    return true;
+  }, [input, busy, settings.model, settings.provider, needsClientOpenAiKey]);
+
   async function send() {
     const text = input.trim();
-    if (!text || busy) return;
+    if (!text || busy || !canSend) return;
     setError(null);
     setInput("");
     const userMsg: ChatMessage = { id: newId(), role: "user", content: text };
@@ -85,7 +114,8 @@ export function SeasonChatPanel({ leagueId }: { leagueId: string }) {
           provider: settings.provider,
           model: settings.model || providerDefaults(settings.provider).model,
           baseUrl: settings.baseUrl || undefined,
-          apiKey: settings.apiKey || undefined,
+          // Empty string → omit so server can use allowlisted OPENAI_API_KEY
+          apiKey: settings.apiKey.trim() || undefined,
         }),
       });
 
@@ -152,7 +182,12 @@ export function SeasonChatPanel({ leagueId }: { leagueId: string }) {
       <div className="flex items-center justify-between border-b border-slate-800 px-3 py-2">
         <div>
           <p className="text-sm font-medium text-slate-100">Season agent</p>
-          <p className="text-xs text-slate-500">Start/sit, trades, waivers</p>
+          <p className="truncate text-[11px] text-slate-500">
+            {settings.model || providerDefaults(settings.provider).model}
+            {settings.provider === "openai" && hasServerOpenAiKey && !settings.apiKey.trim()
+              ? " · account key"
+              : ""}
+          </p>
         </div>
         <Button type="button" variant="ghost" size="sm" onClick={() => setShowSettings((s) => !s)}>
           LLM
@@ -183,10 +218,15 @@ export function SeasonChatPanel({ leagueId }: { leagueId: string }) {
           </div>
           {settings.provider === "openai" ? (
             <div>
-              <Label>API key</Label>
+              <Label>
+                API key {hasServerOpenAiKey ? "(optional — account default available)" : ""}
+              </Label>
               <Input
                 type="password"
                 value={settings.apiKey}
+                placeholder={
+                  hasServerOpenAiKey ? "Leave blank to use account key" : "sk-…"
+                }
                 onChange={(e) => persistSettings({ ...settings, apiKey: e.target.value })}
               />
             </div>
@@ -210,13 +250,18 @@ export function SeasonChatPanel({ leagueId }: { leagueId: string }) {
             }
           >
             {m.content}
-            {m.streaming ? <span className="ml-1 inline-block h-2 w-2 animate-pulse rounded-full bg-emerald-400" /> : null}
+            {m.streaming ? (
+              <span className="ml-1 inline-block h-2 w-2 animate-pulse rounded-full bg-emerald-400" />
+            ) : null}
           </div>
         ))}
         <div ref={bottomRef} />
       </div>
 
       {error ? <p className="px-3 text-xs text-red-400">{error}</p> : null}
+      {needsClientOpenAiKey ? (
+        <p className="px-3 text-xs text-amber-400">Add an OpenAI API key in LLM settings to chat.</p>
+      ) : null}
 
       <div className="flex gap-2 border-t border-slate-800 p-3">
         <Input
@@ -232,15 +277,11 @@ export function SeasonChatPanel({ leagueId }: { leagueId: string }) {
           disabled={busy}
         />
         {busy ? (
-          <Button
-            type="button"
-            variant="secondary"
-            onClick={() => abortRef.current?.abort()}
-          >
+          <Button type="button" variant="secondary" onClick={() => abortRef.current?.abort()}>
             Stop
           </Button>
         ) : (
-          <Button type="button" onClick={() => void send()} disabled={!input.trim()}>
+          <Button type="button" onClick={() => void send()} disabled={!canSend}>
             Send
           </Button>
         )}
