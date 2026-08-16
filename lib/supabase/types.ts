@@ -50,7 +50,9 @@ export interface Player {
 
 export interface PlayerRanking {
   id: string;
-  draft_id: string;
+  /** Shared board key with scoring (not draft-scoped). */
+  season: number;
+  scoring: ScoringFormat;
   fp_player_id: string;
   rank_ecr: number | null;
   rank_adp: number | null;

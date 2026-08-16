@@ -1,4 +1,5 @@
 import type { DraftBundle } from "@/lib/draft/data";
+import type { RankingWithPlayer } from "@/lib/rankings/data";
 import { computeDraftState, computeRosterForTeam } from "@/lib/draft/view";
 import type { Position } from "@/lib/supabase/types";
 
@@ -129,9 +130,9 @@ export const DATASET_COLUMNS = [
   { name: "receptions", type: "number", description: "Projected receptions" },
   { name: "recYds", type: "number", description: "Projected receiving yards" },
   { name: "recTds", type: "number", description: "Projected receiving TDs" },
-  { name: "available", type: "boolean", description: "Still undrafted on this board" },
-  { name: "draftedBy", type: "string", description: "Team that drafted the player" },
-  { name: "pickNumber", type: "number", description: "Pick number if drafted" },
+  { name: "available", type: "boolean", description: "Still undrafted (draft) or unrostered (season)" },
+  { name: "draftedBy", type: "string", description: "Team that drafted/rostered the player" },
+  { name: "pickNumber", type: "number", description: "Pick number if drafted (null in season)" },
 ] as const;
 
 function numStat(stats: Record<string, number> | null | undefined, key: string): number | null {
@@ -140,6 +141,42 @@ function numStat(stats: Record<string, number> | null | undefined, key: string):
   if (raw == null) return null;
   const v = typeof raw === "number" ? raw : Number(raw);
   return Number.isFinite(v) ? v : null;
+}
+
+function rankingToPlayerRow(
+  r: RankingWithPlayer,
+  ownership: { available: boolean; draftedBy: string | null; pickNumber: number | null },
+): PlayerRow {
+  const stats = (r.proj_stats as Record<string, number> | null) ?? null;
+  const rankAdp = r.rank_adp;
+  const rankEcr = r.rank_ecr;
+  return {
+    fpPlayerId: r.fp_player_id,
+    name: r.players.name,
+    position: r.players.position,
+    nflTeam: r.players.nfl_team,
+    byeWeek: r.players.bye_week,
+    draftYear: r.players.draft_year ?? null,
+    rankAdp,
+    rankEcr,
+    rankMin: r.rank_min,
+    rankMax: r.rank_max,
+    rankStd: r.rank_std,
+    tier: r.tier,
+    projPoints: r.proj_points,
+    adpValue: rankAdp != null && rankEcr != null ? rankAdp - rankEcr : null,
+    passYds: numStat(stats, "pass_yds"),
+    passTds: numStat(stats, "pass_tds"),
+    rushYds: numStat(stats, "rush_yds"),
+    rushTds: numStat(stats, "rush_tds"),
+    receptions: numStat(stats, "rec_rec"),
+    recYds: numStat(stats, "rec_yds"),
+    recTds: numStat(stats, "rec_tds"),
+    projStats: stats,
+    available: ownership.available,
+    draftedBy: ownership.draftedBy,
+    pickNumber: ownership.pickNumber,
+  };
 }
 
 /** Flatten rankings + picks into analysis-friendly player rows for one draft. */
@@ -153,36 +190,29 @@ export function buildPlayerRows(bundle: DraftBundle): PlayerRow[] {
 
   return bundle.rankings.map((r) => {
     const pick = pickByPlayer.get(r.fp_player_id);
-    const stats = (r.proj_stats as Record<string, number> | null) ?? null;
-    const rankAdp = r.rank_adp;
-    const rankEcr = r.rank_ecr;
-    return {
-      fpPlayerId: r.fp_player_id,
-      name: r.players.name,
-      position: r.players.position,
-      nflTeam: r.players.nfl_team,
-      byeWeek: r.players.bye_week,
-      draftYear: r.players.draft_year ?? null,
-      rankAdp,
-      rankEcr,
-      rankMin: r.rank_min,
-      rankMax: r.rank_max,
-      rankStd: r.rank_std,
-      tier: r.tier,
-      projPoints: r.proj_points,
-      adpValue: rankAdp != null && rankEcr != null ? rankAdp - rankEcr : null,
-      passYds: numStat(stats, "pass_yds"),
-      passTds: numStat(stats, "pass_tds"),
-      rushYds: numStat(stats, "rush_yds"),
-      rushTds: numStat(stats, "rush_tds"),
-      receptions: numStat(stats, "rec_rec"),
-      recYds: numStat(stats, "rec_yds"),
-      recTds: numStat(stats, "rec_tds"),
-      projStats: stats,
+    return rankingToPlayerRow(r, {
       available: !pick,
       draftedBy: pick?.teamName ?? null,
       pickNumber: pick?.pickNumber ?? null,
-    };
+    });
+  });
+}
+
+/**
+ * Shared rankings board for season leagues. `available` = not on any roster;
+ * `draftedBy` holds the fantasy team name when rostered.
+ */
+export function buildSeasonPlayerRows(
+  rankings: RankingWithPlayer[],
+  rosteredByFpId: Map<string, string>,
+): PlayerRow[] {
+  return rankings.map((r) => {
+    const teamName = rosteredByFpId.get(r.fp_player_id) ?? null;
+    return rankingToPlayerRow(r, {
+      available: !teamName,
+      draftedBy: teamName,
+      pickNumber: null,
+    });
   });
 }
 

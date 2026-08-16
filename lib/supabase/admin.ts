@@ -5,7 +5,7 @@ import { createClient as createSupabaseClient } from "@supabase/supabase-js";
  * import this from a Client Component or expose it to the browser.
  *
  * Used only by the FantasyPros sync route to write to the shared `players`
- * and draft-scoped `player_rankings` tables.
+ * and shared `player_rankings` (season + scoring) tables.
  */
 export function createAdminClient() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;

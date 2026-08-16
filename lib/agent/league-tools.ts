@@ -1,15 +1,37 @@
 import { tool } from "langchain";
 import { z } from "zod";
+import { createPlayerBoardTools } from "@/lib/agent/player-board-tools";
+import { buildSeasonPlayerRows } from "@/lib/agent/player-query";
 import { fetchFreeAgents, fetchLeagueBundle, rosterSlotsFromLeague, userTeam } from "@/lib/league/data";
 import { suggestStartSit } from "@/lib/analytics/start-sit";
 import { evaluateTrade } from "@/lib/analytics/trade";
 import { rankWaiverTargets } from "@/lib/analytics/waivers";
 import { webSearch } from "@/lib/agent/web-search";
+import { fetchRankingsBoard } from "@/lib/rankings/data";
 import type { WorkingLineupEntry } from "@/lib/league/working-lineup";
 import { isStarterSlot } from "@/lib/league/slot-order";
+import type { ScoringFormat } from "@/lib/supabase/types";
 
 function json(data: unknown): string {
   return JSON.stringify(data, null, 2);
+}
+
+async function loadSeasonPlayerRows(leagueId: string) {
+  const bundle = await fetchLeagueBundle(leagueId);
+  if (!bundle) throw new Error("League not found or you do not have access.");
+
+  const rankings = await fetchRankingsBoard(bundle.league.season, bundle.league.scoring as ScoringFormat, {
+    includeProjStats: true,
+  });
+
+  const teamNameByEspnId = new Map(bundle.teams.map((t) => [t.espn_team_id, t.name]));
+  const rosteredByFpId = new Map<string, string>();
+  for (const r of bundle.rosterEntries) {
+    if (!r.fp_player_id) continue;
+    rosteredByFpId.set(r.fp_player_id, teamNameByEspnId.get(r.espn_team_id) ?? "Rostered");
+  }
+
+  return buildSeasonPlayerRows(rankings, rosteredByFpId);
 }
 
 export function createLeagueTools(
@@ -17,6 +39,11 @@ export function createLeagueTools(
   options?: { workingLineup?: WorkingLineupEntry[] | null },
 ) {
   const workingLineup = options?.workingLineup ?? null;
+
+  const boardTools = createPlayerBoardTools({
+    loadRows: () => loadSeasonPlayerRows(leagueId),
+    availabilityNote: "available = not on any roster in this league (free agent / waiver)",
+  });
 
   const get_league_snapshot = tool(
     async () => {
@@ -326,6 +353,7 @@ export function createLeagueTools(
   );
 
   return [
+    ...boardTools,
     get_league_snapshot,
     get_my_roster,
     get_team_roster,

@@ -1,7 +1,11 @@
 "use client";
 
 import { useState, useTransition } from "react";
-import { refreshLeague, refreshLeagueProjections } from "@/app/actions/league";
+import {
+  refreshLeague,
+  refreshLeagueProjections,
+  refreshLeagueRankings,
+} from "@/app/actions/league";
 import { Button } from "@/components/ui/button";
 
 export function LeagueSyncButtons({ leagueId }: { leagueId: string }) {
@@ -27,6 +31,25 @@ export function LeagueSyncButtons({ leagueId }: { leagueId: string }) {
         }}
       >
         {pending ? "Syncing…" : "Sync ESPN"}
+      </Button>
+      <Button
+        type="button"
+        size="sm"
+        variant="secondary"
+        disabled={pending}
+        onClick={() => {
+          setMessage(null);
+          startTransition(async () => {
+            const result = await refreshLeagueRankings(leagueId);
+            setMessage(
+              result.ok
+                ? `Rankings synced · ${result.playerCount} players`
+                : result.message,
+            );
+          });
+        }}
+      >
+        Sync rankings
       </Button>
       <Button
         type="button"

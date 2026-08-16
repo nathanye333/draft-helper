@@ -9,7 +9,9 @@ import {
 } from "@/lib/espn/sync";
 import { fetchEspnTeamsPreview } from "@/lib/espn/client";
 import { syncProjectionsForSeason } from "@/lib/fantasypros/projections-sync";
+import { syncRankingsForSeason } from "@/lib/fantasypros/sync";
 import { createClient } from "@/lib/supabase/server";
+import type { FpScoring } from "@/lib/fantasypros/client";
 
 const connectSchema = z.object({
   espnLeagueId: z.string().min(1),
@@ -112,6 +114,27 @@ export async function refreshLeagueProjections(leagueId: string) {
     season: league.season,
     scoring: league.scoring as "STD" | "PPR" | "HALF",
     weeks: week > 0 ? [0, week] : [0],
+  });
+  revalidatePath(`/leagues/${leagueId}`);
+  revalidatePath(`/leagues/${leagueId}/start-sit`);
+  revalidatePath(`/leagues/${leagueId}/waivers`);
+  revalidatePath(`/leagues/${leagueId}/trades`);
+  if (result.ok) return result;
+  return { ok: false as const, message: result.message };
+}
+
+export async function refreshLeagueRankings(leagueId: string) {
+  const supabase = await createClient();
+  const { data: league } = await supabase
+    .from("leagues")
+    .select("season, scoring")
+    .eq("id", leagueId)
+    .single();
+  if (!league) return { ok: false as const, message: "League not found" };
+
+  const result = await syncRankingsForSeason({
+    season: league.season,
+    scoring: league.scoring as FpScoring,
   });
   revalidatePath(`/leagues/${leagueId}`);
   revalidatePath(`/leagues/${leagueId}/start-sit`);

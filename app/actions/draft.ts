@@ -143,7 +143,7 @@ export async function logPick(input: LogPickInput) {
 
   const { data: draft } = await supabase
     .from("drafts")
-    .select("num_teams")
+    .select("num_teams, season, scoring")
     .eq("id", parsed.draftId)
     .single();
   if (!draft) throw new Error("Draft not found");
@@ -184,7 +184,8 @@ export async function logPick(input: LogPickInput) {
       supabase
         .from("player_rankings")
         .select("rank_adp")
-        .eq("draft_id", parsed.draftId)
+        .eq("season", draft.season)
+        .eq("scoring", draft.scoring)
         .eq("fp_player_id", parsed.fpPlayerId)
         .maybeSingle(),
     ]);

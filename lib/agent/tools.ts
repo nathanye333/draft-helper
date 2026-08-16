@@ -2,25 +2,16 @@ import { tool } from "langchain";
 import { z } from "zod";
 import { computeRecommendations } from "@/lib/analytics/recommendations";
 import { computePositionScarcity } from "@/lib/analytics/scarcity";
+import { createPlayerBoardTools } from "@/lib/agent/player-board-tools";
 import { fetchDraftBundle, type DraftBundle } from "@/lib/draft/data";
 import { computeDraftState, toAvailablePlayerVMs } from "@/lib/draft/view";
 import {
-  aggregatePlayers,
   analyzeTeamRoster,
   buildPlayerRows,
-  DATASET_COLUMNS,
-  findPlayersByNameOrId,
-  findValuePlays,
   getDraftSnapshot,
-  PLAYER_SORT_COLUMNS,
-  queryPlayers,
   type PlayerRow,
 } from "@/lib/agent/player-query";
 import { webSearch } from "@/lib/agent/web-search";
-import type { Position } from "@/lib/supabase/types";
-
-const positionSchema = z.enum(["QB", "RB", "WR", "TE", "K", "DST"]);
-const orderBySchema = z.enum(PLAYER_SORT_COLUMNS);
 
 function json(data: unknown): string {
   return JSON.stringify(data, null, 2);
@@ -42,21 +33,10 @@ async function loadContext(draftId: string): Promise<{
  * call via RLS-backed fetchDraftBundle (no admin client).
  */
 export function createDraftTools(draftId: string) {
-  const list_dataset_columns = tool(
-    async () =>
-      json({
-        note: "All data is cached in Postgres from FantasyPros sync (rankings + season projections).",
-        columns: DATASET_COLUMNS,
-        sortable: PLAYER_SORT_COLUMNS,
-        tip: "Use query_players with orderBy/orderDir to sort any numeric/name column.",
-      }),
-    {
-      name: "list_dataset_columns",
-      description:
-        "Describe every analysis column available on the draft player dataset (ranks, projections, volume stats) and which ones are sortable.",
-      schema: z.object({}),
-    },
-  );
+  const boardTools = createPlayerBoardTools({
+    loadRows: async () => (await loadContext(draftId)).rows,
+    availabilityNote: "available = still undrafted on this board",
+  });
 
   const get_draft_snapshot = tool(
     async () => {
@@ -68,151 +48,6 @@ export function createDraftTools(draftId: string) {
       description:
         "Return the current draft state: pick number, round, on-clock team, scoring, roster needs, projection coverage, sortable columns.",
       schema: z.object({}),
-    },
-  );
-
-  const query_players = tool(
-    async (input) => {
-      const { rows } = await loadContext(draftId);
-      const result = queryPlayers(rows, {
-        nameContains: input.nameContains,
-        position: input.position as Position | undefined,
-        availableOnly: input.availableOnly,
-        adpMin: input.adpMin,
-        adpMax: input.adpMax,
-        ecrMin: input.ecrMin,
-        ecrMax: input.ecrMax,
-        tier: input.tier,
-        nflTeam: input.nflTeam,
-        byeWeek: input.byeWeek,
-        draftYear: input.draftYear,
-        draftYearMin: input.draftYearMin,
-        draftYearMax: input.draftYearMax,
-        projPointsMin: input.projPointsMin,
-        projPointsMax: input.projPointsMax,
-        adpValueMin: input.adpValueMin,
-        limit: input.limit,
-        orderBy: input.orderBy,
-        orderDir: input.orderDir,
-        includeProjStats: input.includeProjStats,
-      });
-      return json({ count: result.length, orderBy: input.orderBy, orderDir: input.orderDir, players: result });
-    },
-    {
-      name: "query_players",
-      description:
-        "SQL-shaped filter+sort over cached draft rankings/projections. Sort by ADP, ECR, projPoints, adpValue, draftYear, rushYds, receptions, etc.",
-      schema: z.object({
-        nameContains: z.string().optional().describe("Case-insensitive substring match on player name"),
-        position: positionSchema.optional(),
-        availableOnly: z.boolean().optional().describe("If true, only undrafted players"),
-        adpMin: z.number().optional(),
-        adpMax: z.number().optional(),
-        ecrMin: z.number().optional(),
-        ecrMax: z.number().optional(),
-        tier: z.number().optional(),
-        nflTeam: z.string().optional().describe("NFL team abbreviation substring, e.g. KC"),
-        byeWeek: z.number().int().optional(),
-        draftYear: z.number().int().optional().describe("Exact NFL draft / rookie year"),
-        draftYearMin: z.number().int().optional().describe("Minimum draft year inclusive"),
-        draftYearMax: z.number().int().optional().describe("Maximum draft year inclusive"),
-        projPointsMin: z.number().optional(),
-        projPointsMax: z.number().optional(),
-        adpValueMin: z.number().optional().describe("Minimum ADP−ECR value (positive = falling)"),
-        limit: z.number().int().min(1).max(100).optional().default(25),
-        orderBy: orderBySchema.optional().default("adp"),
-        orderDir: z.enum(["asc", "desc"]).optional().describe("Defaults by column (ranks asc, points desc)"),
-        includeProjStats: z
-          .boolean()
-          .optional()
-          .describe("If true, include full projStats JSON (larger). Prefer false."),
-      }),
-    },
-  );
-
-  const aggregate_players = tool(
-    async (input) => {
-      const { rows } = await loadContext(draftId);
-      const buckets = aggregatePlayers(rows, {
-        groupBy: input.groupBy,
-        availableOnly: input.availableOnly,
-        metric: input.metric,
-      });
-      return json({ groupBy: input.groupBy, metric: input.metric ?? "adp", buckets });
-    },
-    {
-      name: "aggregate_players",
-      description:
-        "Group players by position, tier, NFL team, bye week, or NFL draft year with counts and min/avg/max for a metric (adp, ecr, projPoints, adpValue).",
-      schema: z.object({
-        groupBy: z.enum(["position", "tier", "nflTeam", "byeWeek", "draftYear"]),
-        availableOnly: z.boolean().optional(),
-        metric: z.enum(["adp", "ecr", "projPoints", "adpValue"]).optional().default("adp"),
-      }),
-    },
-  );
-
-  const get_player = tool(
-    async (input) => {
-      const { rows } = await loadContext(draftId);
-      const matches = findPlayersByNameOrId(rows, input.query, input.limit ?? 10).map((r) =>
-        input.includeProjStats ? r : { ...r, projStats: null },
-      );
-      return json({ matches });
-    },
-    {
-      name: "get_player",
-      description:
-        "Look up players by name substring or FantasyPros id. Returns ranks, projections, and volume stats.",
-      schema: z.object({
-        query: z.string().describe("Player name or fp_player_id"),
-        limit: z.number().int().min(1).max(25).optional().default(10),
-        includeProjStats: z.boolean().optional().default(false),
-      }),
-    },
-  );
-
-  const compare_players = tool(
-    async (input) => {
-      const { rows } = await loadContext(draftId);
-      const players = input.names.map((name) => {
-        const matches = findPlayersByNameOrId(rows, name, 3).map((r) => ({ ...r, projStats: null }));
-        return { query: name, matches };
-      });
-      return json({ players });
-    },
-    {
-      name: "compare_players",
-      description:
-        "Side-by-side ADP/ECR/tier/projPoints/volume/availability for 2–5 player name queries.",
-      schema: z.object({
-        names: z.array(z.string()).min(2).max(5),
-      }),
-    },
-  );
-
-  const find_value_plays = tool(
-    async (input) => {
-      const { rows } = await loadContext(draftId);
-      const players = findValuePlays(rows, {
-        position: input.position as Position | undefined,
-        minAdpValue: input.minAdpValue,
-        limit: input.limit,
-      });
-      return json({
-        definition: "adpValue = ADP − ECR; positive means experts like them more than ADP (falling).",
-        players,
-      });
-    },
-    {
-      name: "find_value_plays",
-      description:
-        "Find available players with the largest ADP−ECR gaps (falling past ADP / expert value).",
-      schema: z.object({
-        position: positionSchema.optional(),
-        minAdpValue: z.number().optional().default(3),
-        limit: z.number().int().min(1).max(50).optional().default(15),
-      }),
     },
   );
 
@@ -349,13 +184,8 @@ export function createDraftTools(draftId: string) {
   );
 
   return [
-    list_dataset_columns,
+    ...boardTools,
     get_draft_snapshot,
-    query_players,
-    aggregate_players,
-    get_player,
-    compare_players,
-    find_value_plays,
     analyze_roster,
     list_teams,
     get_recommendations,

@@ -22,6 +22,20 @@ interface ChatMessage {
   streaming?: boolean;
 }
 
+interface SessionSummary {
+  id: string;
+  title: string;
+  updatedAt: string;
+  messageCount: number;
+}
+
+interface StoredMessagePayload {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  stopped?: boolean;
+}
+
 const LLM_SETTINGS_EVENT = "draft-helper-llm-settings";
 
 function subscribeLlmSettings(onStoreChange: () => void) {
@@ -44,12 +58,24 @@ function newId() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 }
 
+function storedToChatMessage(m: StoredMessagePayload): ChatMessage {
+  return {
+    id: m.id,
+    role: m.role,
+    content: m.content || (m.stopped ? "Stopped." : ""),
+  };
+}
+
 export function SeasonChatPanel({ leagueId }: { leagueId: string }) {
   const settings = useSyncExternalStore(
     subscribeLlmSettings,
     getLlmSettingsSnapshot,
     () => DEFAULT_LLM_SETTINGS,
   );
+  const [sessionsOpen, setSessionsOpen] = useState(false);
+  const [sessions, setSessions] = useState<SessionSummary[]>([]);
+  const [sessionsLoading, setSessionsLoading] = useState(true);
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
@@ -58,10 +84,125 @@ export function SeasonChatPanel({ leagueId }: { leagueId: string }) {
   const [hasServerOpenAiKey, setHasServerOpenAiKey] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const sessionsMenuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, busy]);
+
+  useEffect(() => {
+    if (!sessionsOpen) return;
+    const onDocClick = (e: MouseEvent) => {
+      if (!sessionsMenuRef.current?.contains(e.target as Node)) {
+        setSessionsOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", onDocClick);
+    return () => document.removeEventListener("mousedown", onDocClick);
+  }, [sessionsOpen]);
+
+  async function refreshSessionsList() {
+    try {
+      const res = await fetch(`/api/leagues/${leagueId}/chat/sessions`);
+      const data = (await res.json()) as {
+        ok?: boolean;
+        sessions?: SessionSummary[];
+      };
+      if (res.ok && data.ok && data.sessions) {
+        setSessions(data.sessions);
+      }
+    } catch {
+      // keep existing list
+    }
+  }
+
+  async function loadSession(sessionId: string, knownSessions?: SessionSummary[]) {
+    const res = await fetch(`/api/leagues/${leagueId}/chat/sessions/${sessionId}`);
+    const data = (await res.json()) as {
+      ok?: boolean;
+      session?: {
+        id: string;
+        title: string;
+        updatedAt: string;
+        messageCount: number;
+        messages: StoredMessagePayload[];
+      };
+    };
+    if (!res.ok || !data.ok || !data.session) {
+      throw new Error("Failed to load chat session");
+    }
+
+    setActiveSessionId(data.session.id);
+    setMessages(data.session.messages.map(storedToChatMessage));
+    setError(null);
+    setSessionsOpen(false);
+
+    const summary: SessionSummary = {
+      id: data.session.id,
+      title: data.session.title,
+      updatedAt: data.session.updatedAt,
+      messageCount: data.session.messageCount,
+    };
+    setSessions((prev) => {
+      const base = knownSessions ?? prev;
+      const without = base.filter((s) => s.id !== summary.id);
+      return [summary, ...without];
+    });
+  }
+
+  async function refreshSessions(preferSessionId?: string | null) {
+    setSessionsLoading(true);
+    try {
+      const res = await fetch(`/api/leagues/${leagueId}/chat/sessions`);
+      const data = (await res.json()) as {
+        ok?: boolean;
+        sessions?: SessionSummary[];
+      };
+      if (!res.ok || !data.ok || !data.sessions) {
+        throw new Error("Failed to load chat sessions");
+      }
+      setSessions(data.sessions);
+
+      const targetId =
+        preferSessionId ??
+        activeSessionId ??
+        (data.sessions.length > 0 ? data.sessions[0]!.id : null);
+
+      if (targetId && targetId !== activeSessionId) {
+        await loadSession(targetId, data.sessions);
+      } else if (!targetId) {
+        setActiveSessionId(null);
+        setMessages([]);
+      }
+    } catch {
+      setSessions([]);
+    } finally {
+      setSessionsLoading(false);
+    }
+  }
+
+  async function startNewChat() {
+    if (busy) return;
+    const res = await fetch(`/api/leagues/${leagueId}/chat/sessions`, { method: "POST" });
+    const data = (await res.json()) as {
+      ok?: boolean;
+      session?: SessionSummary;
+    };
+    if (!res.ok || !data.ok || !data.session) {
+      setError("Could not start a new chat");
+      return;
+    }
+    setActiveSessionId(data.session.id);
+    setMessages([]);
+    setError(null);
+    setSessionsOpen(false);
+    setSessions((prev) => [data.session!, ...prev.filter((s) => s.id !== data.session!.id)]);
+  }
+
+  useEffect(() => {
+    void refreshSessions();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- load once per league
+  }, [leagueId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -111,11 +252,11 @@ export function SeasonChatPanel({ leagueId }: { leagueId: string }) {
         headers: { "Content-Type": "application/json" },
         signal: controller.signal,
         body: JSON.stringify({
+          sessionId: activeSessionId ?? undefined,
           messages: history.map((m) => ({ role: m.role, content: m.content })),
           provider: settings.provider,
           model: settings.model || providerDefaults(settings.provider).model,
           baseUrl: settings.baseUrl || undefined,
-          // Empty string → omit so server can use allowlisted OPENAI_API_KEY
           apiKey: settings.apiKey.trim() || undefined,
           workingLineup: readWorkingLineup(leagueId) ?? undefined,
         }),
@@ -140,7 +281,9 @@ export function SeasonChatPanel({ leagueId }: { leagueId: string }) {
         for (const line of lines) {
           if (!line.trim()) continue;
           const event = JSON.parse(line) as DraftAgentStreamEvent;
-          if (event.type === "token") {
+          if (event.type === "session") {
+            setActiveSessionId(event.sessionId);
+          } else if (event.type === "token") {
             assistantContent += event.delta;
             setMessages((prev) =>
               prev.map((m) =>
@@ -160,6 +303,7 @@ export function SeasonChatPanel({ leagueId }: { leagueId: string }) {
             : m,
         ),
       );
+      void refreshSessionsList();
     } catch (err) {
       if ((err as Error).name === "AbortError") {
         setMessages((prev) =>
@@ -169,6 +313,7 @@ export function SeasonChatPanel({ leagueId }: { leagueId: string }) {
               : m,
           ),
         );
+        void refreshSessionsList();
       } else {
         setError(err instanceof Error ? err.message : "Chat failed");
         setMessages((prev) => prev.filter((m) => m.id !== assistantId));
@@ -179,11 +324,41 @@ export function SeasonChatPanel({ leagueId }: { leagueId: string }) {
     }
   }
 
+  const activeSessionTitle =
+    sessions.find((s) => s.id === activeSessionId)?.title ?? "Chat";
+
   return (
     <div className="flex h-full min-h-[420px] flex-col">
-      <div className="flex items-center justify-between border-b border-slate-800 px-3 py-2">
-        <div>
-          <p className="text-sm font-medium text-slate-100">Season agent</p>
+      <div className="flex items-center justify-between gap-2 border-b border-slate-800 px-3 py-2">
+        <div className="relative min-w-0 flex-1" ref={sessionsMenuRef}>
+          <button
+            type="button"
+            className="max-w-full truncate text-left text-sm font-medium text-slate-100 hover:text-white disabled:opacity-60"
+            disabled={busy || sessionsLoading}
+            onClick={() => setSessionsOpen((o) => !o)}
+          >
+            {sessionsLoading ? "Loading chats…" : activeSessionTitle}
+          </button>
+          {sessionsOpen ? (
+            <div className="absolute left-0 top-full z-20 mt-1 max-h-56 w-64 overflow-y-auto rounded-md border border-slate-700 bg-slate-950 py-1 shadow-lg">
+              {sessions.length === 0 ? (
+                <p className="px-3 py-2 text-xs text-slate-500">No saved chats yet</p>
+              ) : (
+                sessions.map((s) => (
+                  <button
+                    key={s.id}
+                    type="button"
+                    className={`block w-full truncate px-3 py-1.5 text-left text-xs hover:bg-slate-800 ${
+                      s.id === activeSessionId ? "text-emerald-300" : "text-slate-200"
+                    }`}
+                    onClick={() => void loadSession(s.id)}
+                  >
+                    {s.title}
+                  </button>
+                ))
+              )}
+            </div>
+          ) : null}
           <p className="truncate text-[11px] text-slate-500">
             {settings.model || providerDefaults(settings.provider).model}
             {settings.provider === "openai" && hasServerOpenAiKey && !settings.apiKey.trim()
@@ -191,9 +366,14 @@ export function SeasonChatPanel({ leagueId }: { leagueId: string }) {
               : ""}
           </p>
         </div>
-        <Button type="button" variant="ghost" size="sm" onClick={() => setShowSettings((s) => !s)}>
-          LLM
-        </Button>
+        <div className="flex shrink-0 items-center gap-1">
+          <Button type="button" variant="ghost" size="sm" disabled={busy} onClick={() => void startNewChat()}>
+            New chat
+          </Button>
+          <Button type="button" variant="ghost" size="sm" onClick={() => setShowSettings((s) => !s)}>
+            LLM
+          </Button>
+        </div>
       </div>
 
       {showSettings ? (
@@ -239,7 +419,8 @@ export function SeasonChatPanel({ leagueId }: { leagueId: string }) {
       <div className="flex-1 space-y-3 overflow-y-auto p-3">
         {messages.length === 0 ? (
           <p className="text-sm text-slate-500">
-            Ask for a start/sit, trade eval, or waiver targets.
+            Ask for a start/sit, trade eval, waiver targets, or player comparisons (ADP/ECR).
+            Chats are saved per league.
           </p>
         ) : null}
         {messages.map((m) => (

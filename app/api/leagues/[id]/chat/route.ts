@@ -1,6 +1,12 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { streamLeagueChatAgent } from "@/lib/agent/create-agent";
+import {
+  appendLeagueChatTurn,
+  createLeagueChatSession,
+  getLeagueChatSession,
+  type StoredToolCall,
+} from "@/lib/agent/league-chat-sessions";
 import type { DraftAgentStreamEvent } from "@/lib/agent/stream-types";
 import { resolveOpenAiApiKey } from "@/lib/agent/server-llm";
 import { fetchLeagueBundle } from "@/lib/league/data";
@@ -9,6 +15,7 @@ import { createClient } from "@/lib/supabase/server";
 export const maxDuration = 120;
 
 const chatBodySchema = z.object({
+  sessionId: z.string().uuid().optional(),
   messages: z
     .array(
       z.object({
@@ -71,7 +78,15 @@ export async function POST(
     );
   }
 
-  const { messages, provider, model, baseUrl, apiKey: clientApiKey, workingLineup } = parsed.data;
+  const {
+    messages,
+    provider,
+    model,
+    baseUrl,
+    apiKey: clientApiKey,
+    workingLineup,
+    sessionId: bodySessionId,
+  } = parsed.data;
   const apiKey =
     provider === "openai"
       ? resolveOpenAiApiKey(user.email, clientApiKey)
@@ -84,6 +99,24 @@ export async function POST(
     );
   }
 
+  let sessionId = bodySessionId;
+  if (sessionId) {
+    const existing = await getLeagueChatSession(supabase, sessionId);
+    if (!existing || existing.leagueId !== leagueId) {
+      return NextResponse.json({ ok: false, message: "Session not found" }, { status: 404 });
+    }
+  } else {
+    const created = await createLeagueChatSession(supabase, { leagueId, userId: user.id });
+    sessionId = created.id;
+  }
+
+  const userTurn = [...messages].reverse().find((m) => m.role === "user");
+  if (!userTurn) {
+    return NextResponse.json({ ok: false, message: "Missing user message" }, { status: 400 });
+  }
+
+  const resolvedSessionId = sessionId;
+
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
       const send = (event: DraftAgentStreamEvent) => {
@@ -93,6 +126,15 @@ export async function POST(
           // disconnected
         }
       };
+
+      let assistantContent = "";
+      let assistantReasoning = "";
+      const toolCalls = new Map<string, StoredToolCall>();
+      let stopped = false;
+
+      send({ type: "session", sessionId: resolvedSessionId });
+
+      let pendingDone: Extract<DraftAgentStreamEvent, { type: "done" }> | null = null;
 
       try {
         for await (const event of streamLeagueChatAgent({
@@ -112,9 +154,67 @@ export async function POST(
               }))
             : null,
         })) {
-          if (request.signal.aborted) break;
+          if (request.signal.aborted) {
+            stopped = true;
+            break;
+          }
+
+          if (event.type === "token") {
+            assistantContent += event.delta;
+          } else if (event.type === "reasoning") {
+            assistantReasoning += event.delta;
+          } else if (event.type === "tool_start") {
+            toolCalls.set(event.id, {
+              id: event.id,
+              name: event.name,
+              input: event.input,
+              status: "running",
+            });
+          } else if (event.type === "tool_end") {
+            const existing = toolCalls.get(event.id);
+            toolCalls.set(event.id, {
+              id: event.id,
+              name: event.name,
+              input: existing?.input ?? null,
+              output: event.output,
+              status: "done",
+            });
+          } else if (event.type === "done") {
+            stopped = Boolean(event.stopped);
+            pendingDone = event;
+            continue;
+          } else if (event.type === "error") {
+            send(event);
+            continue;
+          }
+
           send(event);
         }
+
+        if (request.signal.aborted) stopped = true;
+
+        const finalContent =
+          assistantContent.trim() ||
+          (stopped ? "Stopped." : assistantReasoning.trim() ? "" : "No response from the model.");
+
+        try {
+          await appendLeagueChatTurn(supabase, resolvedSessionId, {
+            userContent: userTurn.content,
+            assistant: {
+              content: finalContent,
+              reasoning: assistantReasoning.trim() || undefined,
+              toolCalls: [...toolCalls.values()],
+              stopped,
+            },
+          });
+        } catch (persistErr) {
+          console.error(
+            "[season-agent] failed to persist chat turn:",
+            persistErr instanceof Error ? persistErr.message : persistErr,
+          );
+        }
+
+        send(pendingDone ?? { type: "done", stopped });
       } catch (err) {
         const message = err instanceof Error ? err.message : "Agent failed";
         send({ type: "error", message });
