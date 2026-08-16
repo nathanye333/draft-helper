@@ -5,7 +5,6 @@ import { LeagueNav } from "@/components/league/league-nav";
 import { SeasonAgentSection } from "@/components/league/season-agent-section";
 import { LeagueSyncButtons } from "@/components/league/league-sync-buttons";
 import { WaiversTable } from "@/components/league/waivers-table";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
 export default async function WaiversPage({
   params,
@@ -26,28 +25,21 @@ export default async function WaiversPage({
     <div className="mx-auto max-w-6xl px-4 py-8 pb-28">
       <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-semibold">Waiver / FA board</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">Players</h1>
           <p className="mt-1 text-sm text-slate-400">
-            All ESPN free agents &amp; waivers with ESPN projected/actual points (league scoring).
-            Click a player for week-by-week history.
+            Free agents &amp; waivers · ESPN projections (read-only — no add/drop)
           </p>
         </div>
         <LeagueSyncButtons leagueId={id} />
       </div>
       <LeagueNav leagueId={id} current="waivers" />
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Available players</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <WaiversTable
-            leagueId={id}
-            currentWeek={pool.currentWeek}
-            players={pool.players}
-          />
-        </CardContent>
-      </Card>
+      <WaiversTable
+        leagueId={id}
+        currentWeek={pool.currentWeek}
+        season={pool.season}
+        players={pool.players}
+      />
 
       <SeasonAgentSection leagueId={id} />
     </div>

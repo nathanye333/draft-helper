@@ -137,20 +137,22 @@ export async function fetchPlayerCard(
 
 export async function fetchTeamRosterPage(leagueId: string, espnTeamId: number) {
   const supabase = await createClient();
-  const { data: team } = await supabase
-    .from("league_teams")
-    .select("*")
-    .eq("league_id", leagueId)
-    .eq("espn_team_id", espnTeamId)
-    .maybeSingle();
+  const [{ data: team }, { data: league }] = await Promise.all([
+    supabase
+      .from("league_teams")
+      .select("*")
+      .eq("league_id", leagueId)
+      .eq("espn_team_id", espnTeamId)
+      .maybeSingle(),
+    supabase.from("leagues").select("current_week").eq("id", leagueId).single(),
+  ]);
   if (!team) return null;
 
   const { data: roster } = await supabase
     .from("league_roster_entries")
     .select("*")
     .eq("league_id", leagueId)
-    .eq("espn_team_id", espnTeamId)
-    .order("lineup_slot");
+    .eq("espn_team_id", espnTeamId);
 
   const ids = (roster ?? []).map((r) => r.espn_player_id as number);
   const { data: pool } =
@@ -173,6 +175,7 @@ export async function fetchTeamRosterPage(leagueId: string, espnTeamId: number) 
 
   return {
     team: team as LeagueTeam,
+    currentWeek: (league?.current_week as number | null) ?? null,
     players: (roster ?? []).map((r) => {
       const p = poolById.get(r.espn_player_id);
       return {
@@ -184,7 +187,10 @@ export async function fetchTeamRosterPage(leagueId: string, espnTeamId: number) 
         injuryStatus: r.injury_status as string | null,
         headshotUrl: headshots.get(r.espn_player_id) ?? null,
         weekProjected: (p?.week_projected as number | null) ?? null,
+        weekActual: (p?.week_actual as number | null) ?? null,
+        seasonProjected: (p?.season_projected as number | null) ?? null,
         seasonActual: (p?.season_actual as number | null) ?? null,
+        percentOwned: (p?.percent_owned as number | null) ?? null,
       };
     }),
   };

@@ -3,9 +3,8 @@ import { notFound, redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { fetchTeamRosterPage } from "@/lib/league/player-data";
 import { LeagueNav } from "@/components/league/league-nav";
-import { PlayerLink } from "@/components/league/entity-links";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
+import { RosterLineupTable } from "@/components/league/roster-lineup-table";
+import { LeagueSyncButtons } from "@/components/league/league-sync-buttons";
 
 export default async function TeamPage({
   params,
@@ -24,7 +23,7 @@ export default async function TeamPage({
   if (!page) notFound();
 
   return (
-    <div className="mx-auto max-w-5xl px-4 py-8 pb-16">
+    <div className="mx-auto max-w-6xl px-4 py-8 pb-16">
       <p className="mb-2 text-sm text-slate-500">
         <Link href={`/leagues/${leagueId}`} className="hover:text-slate-300">
           League
@@ -34,51 +33,24 @@ export default async function TeamPage({
       </p>
       <LeagueNav leagueId={leagueId} current="overview" />
 
-      <h1 className="mb-1 text-2xl font-semibold">{page.team.name}</h1>
-      <p className="mb-6 text-sm text-slate-400">
-        {page.team.wins}-{page.team.losses}-{page.team.ties}
-        {page.team.points_for != null ? ` · ${page.team.points_for.toFixed(1)} PF` : ""}
-        {page.team.is_user_team ? " · your team" : ""}
-      </p>
+      <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">{page.team.name}</h1>
+          <p className="mt-1 text-sm text-slate-400">
+            {page.team.wins}-{page.team.losses}-{page.team.ties}
+            {page.team.points_for != null ? ` · ${Number(page.team.points_for).toFixed(1)} PF` : ""}
+            {page.team.is_user_team ? " · your team" : ""}
+            {page.currentWeek != null ? ` · NFL week ${page.currentWeek}` : ""}
+          </p>
+        </div>
+        <LeagueSyncButtons leagueId={leagueId} />
+      </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Roster ({page.players.length})</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-2">
-          {page.players.map((p) => (
-            <div
-              key={p.espnPlayerId}
-              className="flex items-center gap-3 border-b border-slate-900/80 py-2 last:border-0"
-            >
-              <div className="h-10 w-12 shrink-0 overflow-hidden rounded bg-slate-900">
-                {p.headshotUrl ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img
-                    src={p.headshotUrl}
-                    alt=""
-                    className="h-full w-full object-cover object-top"
-                  />
-                ) : null}
-              </div>
-              <div className="min-w-0 flex-1">
-                <PlayerLink leagueId={leagueId} espnPlayerId={p.espnPlayerId} className="font-medium">
-                  {p.name}
-                </PlayerLink>
-                <div className="text-xs text-slate-500">
-                  {p.position}
-                  {p.nflTeam ? ` · ${p.nflTeam}` : ""}
-                  {p.injuryStatus ? ` · ${p.injuryStatus}` : ""}
-                </div>
-              </div>
-              <Badge variant="default">{p.lineupSlot}</Badge>
-              <div className="w-16 text-right text-xs tabular-nums text-slate-400">
-                {p.weekProjected != null ? p.weekProjected.toFixed(1) : "—"}
-              </div>
-            </div>
-          ))}
-        </CardContent>
-      </Card>
+      <RosterLineupTable
+        leagueId={leagueId}
+        currentWeek={page.currentWeek}
+        players={page.players}
+      />
     </div>
   );
 }

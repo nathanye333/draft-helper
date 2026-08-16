@@ -5,7 +5,7 @@ const LINKS = [
   { href: "", label: "Overview" },
   { href: "/start-sit", label: "Start/Sit" },
   { href: "/trades", label: "Trades" },
-  { href: "/waivers", label: "Waivers" },
+  { href: "/waivers", label: "Players" },
   { href: "/news", label: "News" },
 ] as const;
 

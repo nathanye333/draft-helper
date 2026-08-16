@@ -4,9 +4,9 @@ import { fetchLeagueBundle, userTeam } from "@/lib/league/data";
 import { LeagueNav } from "@/components/league/league-nav";
 import { LeagueSyncButtons } from "@/components/league/league-sync-buttons";
 import { SeasonAgentSection } from "@/components/league/season-agent-section";
-import { PlayerLink, TeamLink } from "@/components/league/entity-links";
+import { TeamLink } from "@/components/league/entity-links";
+import { RosterLineupTable } from "@/components/league/roster-lineup-table";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 
 export default async function LeagueOverviewPage({
   params,
@@ -26,12 +26,45 @@ export default async function LeagueOverviewPage({
     ? bundle.rosterEntries.filter((r) => r.espn_team_id === mine.espn_team_id)
     : [];
 
+  const ids = myRoster.map((r) => r.espn_player_id);
+  const [{ data: pool }, { data: espnPlayers }] = await Promise.all([
+    ids.length > 0
+      ? supabase.from("league_player_pool").select("*").eq("league_id", id).in("espn_player_id", ids)
+      : Promise.resolve({ data: [] as Record<string, unknown>[] }),
+    ids.length > 0
+      ? supabase.from("espn_players").select("espn_player_id, headshot_url").in("espn_player_id", ids)
+      : Promise.resolve({ data: [] as { espn_player_id: number; headshot_url: string | null }[] }),
+  ]);
+
+  const poolById = new Map((pool ?? []).map((p) => [p.espn_player_id as number, p]));
+  const headshots = new Map(
+    (espnPlayers ?? []).map((p) => [p.espn_player_id as number, p.headshot_url as string | null]),
+  );
+
+  const lineupPlayers = myRoster.map((r) => {
+    const p = poolById.get(r.espn_player_id);
+    return {
+      espnPlayerId: r.espn_player_id,
+      name: r.player_name,
+      position: r.position,
+      nflTeam: r.nfl_team,
+      lineupSlot: r.lineup_slot,
+      injuryStatus: r.injury_status,
+      headshotUrl: headshots.get(r.espn_player_id) ?? null,
+      weekProjected: (p?.week_projected as number | null) ?? null,
+      weekActual: (p?.week_actual as number | null) ?? null,
+      seasonProjected: (p?.season_projected as number | null) ?? null,
+      seasonActual: (p?.season_actual as number | null) ?? null,
+      percentOwned: (p?.percent_owned as number | null) ?? null,
+    };
+  });
+
   return (
-    <div className="mx-auto max-w-5xl px-4 py-8 pb-28">
+    <div className="mx-auto max-w-6xl px-4 py-8 pb-28">
       <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-semibold">{bundle.league.name}</h1>
-          <p className="text-sm text-slate-400">
+          <h1 className="text-2xl font-semibold tracking-tight">{bundle.league.name}</h1>
+          <p className="mt-1 text-sm text-slate-400">
             {bundle.league.season} · {bundle.league.scoring}
             {bundle.league.current_week != null ? ` · Week ${bundle.league.current_week}` : ""}
           </p>
@@ -41,9 +74,9 @@ export default async function LeagueOverviewPage({
 
       <LeagueNav leagueId={id} current="overview" />
 
-      <div className="grid gap-4 md:grid-cols-2">
+      <div className="mb-6 grid gap-4 lg:grid-cols-[240px_1fr]">
         <Card>
-          <CardHeader>
+          <CardHeader className="py-3">
             <CardTitle>Standings</CardTitle>
           </CardHeader>
           <CardContent className="space-y-2 text-sm">
@@ -54,11 +87,11 @@ export default async function LeagueOverviewPage({
                   <TeamLink
                     leagueId={id}
                     espnTeamId={t.espn_team_id}
-                    className={t.is_user_team ? "font-medium" : ""}
+                    className={t.is_user_team ? "font-medium" : "text-sky-400"}
                   >
                     {t.name}
                   </TeamLink>
-                  <span className="text-slate-400">
+                  <span className="tabular-nums text-slate-400">
                     {t.wins}-{t.losses}-{t.ties}
                   </span>
                 </div>
@@ -66,56 +99,26 @@ export default async function LeagueOverviewPage({
           </CardContent>
         </Card>
 
-        <Card>
-          <CardHeader>
-            <CardTitle>
+        <div>
+          <div className="mb-2 flex items-baseline justify-between gap-2">
+            <h2 className="text-sm font-semibold tracking-wide text-slate-300 uppercase">
               {mine ? (
-                <>
-                  <TeamLink leagueId={id} espnTeamId={mine.espn_team_id}>
-                    {mine.name}
-                  </TeamLink>{" "}
-                  roster
-                </>
+                <TeamLink leagueId={id} espnTeamId={mine.espn_team_id}>
+                  {mine.name}
+                </TeamLink>
               ) : (
-                "Your roster"
+                "Roster"
               )}
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="max-h-[28rem] space-y-1.5 overflow-y-auto text-sm">
-            {myRoster.length === 0 ? (
-              <p className="text-slate-500">No roster yet — sync ESPN.</p>
-            ) : (
-              myRoster.map((r) => {
-                const proj = r.fp_player_id
-                  ? bundle.projectionsByFpId.get(r.fp_player_id)
-                  : undefined;
-                return (
-                  <div key={r.id} className="flex items-center justify-between gap-2">
-                    <div className="min-w-0">
-                      <PlayerLink
-                        leagueId={id}
-                        espnPlayerId={r.espn_player_id}
-                        className="font-medium"
-                      >
-                        {r.player_name}
-                      </PlayerLink>
-                      <span className="ml-2 text-xs text-slate-500">
-                        {r.position}
-                        {r.nfl_team ? ` · ${r.nfl_team}` : ""}
-                      </span>
-                    </div>
-                    <div className="flex shrink-0 items-center gap-2">
-                      <Badge variant="default">{r.lineup_slot}</Badge>
-                      <span className="w-14 text-right text-xs text-slate-400">
-                        {proj?.week != null ? proj.week.toFixed(1) : "—"}
-                      </span>
-                    </div>
-                  </div>
-                );
-              })
-            )}
-          </CardContent>
-        </Card>
+            </h2>
+            <span className="text-xs text-slate-500">QB → RB → WR → TE → FLEX → D/ST → K → Bench</span>
+          </div>
+          <RosterLineupTable
+            leagueId={id}
+            currentWeek={bundle.league.current_week}
+            players={lineupPlayers}
+            emptyMessage="No roster yet — sync ESPN."
+          />
+        </div>
       </div>
 
       {!bundle.hasCredentials ? (
