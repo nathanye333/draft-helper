@@ -11,6 +11,7 @@ type WaiverRow = {
   headshotUrl: string | null;
   ownership: string;
   percentOwned: number | null;
+  percentStarted: number | null;
   weekProjected: number | null;
   weekActual: number | null;
   seasonProjected: number | null;
@@ -22,6 +23,7 @@ type SortKey =
   | "name"
   | "position"
   | "percentOwned"
+  | "percentStarted"
   | "weekProjected"
   | "seasonActual"
   | "seasonProjected"
@@ -159,7 +161,9 @@ export function WaiversTable({
               <th className="px-2 py-1.5 text-right font-semibold">
                 <SortBtn k="percentOwned" label="%Rost" />
               </th>
-              <th className="px-2 py-1.5 text-right font-semibold">Avg</th>
+              <th className="px-2 py-1.5 text-right font-semibold">
+                <SortBtn k="percentStarted" label="%Start" />
+              </th>
               <th className="border-l border-slate-800 px-2 py-1.5 text-right font-semibold">
                 <SortBtn k="seasonProjected" label="FPTS" />
               </th>
@@ -222,8 +226,8 @@ export function WaiversTable({
                   <td className="px-2 py-2 text-right tabular-nums text-slate-400">
                     {p.percentOwned != null ? p.percentOwned.toFixed(1) : "—"}
                   </td>
-                  <td className="px-2 py-2 text-right tabular-nums text-slate-500">
-                    {p.weekProjected != null ? p.weekProjected.toFixed(1) : "—"}
+                  <td className="px-2 py-2 text-right tabular-nums text-slate-400">
+                    {p.percentStarted != null ? p.percentStarted.toFixed(1) : "—"}
                   </td>
                   <td className="border-l border-slate-900 px-2 py-2 text-right tabular-nums text-slate-200">
                     {p.seasonProjected != null ? p.seasonProjected.toFixed(1) : "—"}

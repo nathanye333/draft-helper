@@ -135,6 +135,7 @@ export interface EspnPlayerUniverseRow {
   ownership: EspnOwnership;
   espnTeamId: number | null;
   percentOwned: number | null;
+  percentStarted: number | null;
   injuryStatus: string | null;
   /** Points keyed by season → week → actual/projected (week 0 = season total). */
   pointsBySeason: Map<number, Map<number, EspnWeekPoints>>;
@@ -272,10 +273,16 @@ export async function fetchEspnPlayerUniverse(params: {
     const name = String(player.fullName ?? `Player ${espnPlayerId}`);
     const nflTeam = NFL_TEAM_ABBREV[Number(player.proTeamId)] ?? null;
     const pointsBySeason = parsePlayerStats(player.stats as unknown[] | undefined, seasons);
-    const ownershipObj = player.ownership as { percentOwned?: number } | undefined;
+    const ownershipObj = player.ownership as {
+      percentOwned?: number;
+      percentStarted?: number;
+    } | undefined;
     const percentOwnedRaw =
       ownershipObj?.percentOwned ??
       (wrap.percentOwned != null ? Number(wrap.percentOwned) : null);
+    const percentStartedRaw =
+      ownershipObj?.percentStarted ??
+      (wrap.percentStarted != null ? Number(wrap.percentStarted) : null);
 
     out.push({
       espnPlayerId,
@@ -288,6 +295,10 @@ export async function fetchEspnPlayerUniverse(params: {
       percentOwned:
         percentOwnedRaw != null && Number.isFinite(Number(percentOwnedRaw))
           ? Number(percentOwnedRaw)
+          : null,
+      percentStarted:
+        percentStartedRaw != null && Number.isFinite(Number(percentStartedRaw))
+          ? Number(percentStartedRaw)
           : null,
       injuryStatus: player.injuryStatus != null ? String(player.injuryStatus) : null,
       pointsBySeason,

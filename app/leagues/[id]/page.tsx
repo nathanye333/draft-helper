@@ -66,6 +66,7 @@ export default async function LeagueOverviewPage({
       seasonProjected: (p?.season_projected as number | null) ?? null,
       seasonActual: (p?.season_actual as number | null) ?? null,
       percentOwned: (p?.percent_owned as number | null) ?? null,
+      percentStarted: (p?.percent_started as number | null) ?? null,
     };
   });
 

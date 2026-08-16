@@ -210,6 +210,7 @@ export async function fetchTeamRosterPage(leagueId: string, espnTeamId: number) 
       seasonProjected: (p?.season_projected as number | null) ?? null,
       seasonActual: (p?.season_actual as number | null) ?? null,
       percentOwned: (p?.percent_owned as number | null) ?? null,
+      percentStarted: (p?.percent_started as number | null) ?? null,
       fpPlayerId: (r.fp_player_id as string | null) ?? (p?.fp_player_id as string | null) ?? null,
     };
   });
@@ -278,6 +279,7 @@ export async function fetchWaiverPool(leagueId: string) {
       }),
       ownership: r.ownership,
       percentOwned: r.percent_owned,
+      percentStarted: r.percent_started,
       weekProjected: r.week_projected,
       weekActual: r.week_actual,
       seasonProjected: r.season_projected,

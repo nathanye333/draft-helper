@@ -364,6 +364,7 @@ async function persistEspnPlayerUniverse(params: {
       ownership: p.ownership,
       espn_team_id: p.espnTeamId,
       percent_owned: p.percentOwned,
+      percent_started: p.percentStarted,
       injury_status: p.injuryStatus,
       week_projected: summary.weekProjected,
       week_actual: summary.weekActual,

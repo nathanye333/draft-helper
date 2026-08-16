@@ -21,6 +21,7 @@ export interface LineupPlayerRow {
   seasonProjected: number | null;
   seasonActual: number | null;
   percentOwned: number | null;
+  percentStarted: number | null;
   opponent?: string | null;
 }
 
@@ -62,6 +63,7 @@ function TotalsRow({
         {rows.some((r) => r.weekActual != null) ? sum("weekActual").toFixed(1) : "—"}
       </td>
       <td className="px-2 py-2" />
+      <td className="px-2 py-2" />
       <td className="px-2 py-2 text-right tabular-nums">
         {hasSeason ? sum("seasonProjected").toFixed(1) : "—"}
       </td>
@@ -75,7 +77,7 @@ function TotalsRow({
 function SectionHeader({ title }: { title: string }) {
   return (
     <tr className="bg-slate-950">
-      <td colSpan={7} className="px-3 py-2 text-[11px] font-semibold tracking-wider text-slate-400 uppercase">
+      <td colSpan={8} className="px-3 py-2 text-[11px] font-semibold tracking-wider text-slate-400 uppercase">
         {title}
       </td>
     </tr>
@@ -117,7 +119,7 @@ export function RosterLineupTable({
 
   return (
     <div className="overflow-x-auto rounded-xl border border-slate-800">
-      <table className="w-full min-w-[780px] text-left text-sm">
+      <table className="w-full min-w-[840px] text-left text-sm">
         <thead className="border-b border-slate-800 bg-slate-950/90 text-[10px] tracking-wide text-slate-500 uppercase">
           <tr>
             <th className="px-3 py-2.5 font-semibold">Slot</th>
@@ -125,6 +127,7 @@ export function RosterLineupTable({
             <th className="px-2 py-2.5 text-right font-semibold">Proj {weekLabel}</th>
             <th className="px-2 py-2.5 text-right font-semibold">Score</th>
             <th className="px-2 py-2.5 text-right font-semibold">% Rost</th>
+            <th className="px-2 py-2.5 text-right font-semibold">% Start</th>
             <th className="px-2 py-2.5 text-right font-semibold">Season Proj</th>
             <th className="px-3 py-2.5 text-right font-semibold">Season Act</th>
           </tr>
@@ -165,6 +168,9 @@ export function RosterLineupTable({
                   </td>
                   <td className="px-2 py-2 text-right tabular-nums text-slate-400">
                     {p.percentOwned != null ? p.percentOwned.toFixed(1) : "—"}
+                  </td>
+                  <td className="px-2 py-2 text-right tabular-nums text-slate-400">
+                    {p.percentStarted != null ? p.percentStarted.toFixed(1) : "—"}
                   </td>
                   <td className="px-2 py-2 text-right tabular-nums text-slate-300">
                     {p.seasonProjected != null ? p.seasonProjected.toFixed(1) : "—"}

@@ -193,6 +193,7 @@ export interface LeaguePlayerPoolRow {
   ownership: LeaguePlayerOwnership;
   espn_team_id: number | null;
   percent_owned: number | null;
+  percent_started: number | null;
   injury_status: string | null;
   week_projected: number | null;
   week_actual: number | null;

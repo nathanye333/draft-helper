@@ -130,6 +130,14 @@ export default async function PlayerCardPage({
                     {pool?.percent_owned != null ? `${pool.percent_owned.toFixed(1)}%` : "—"}
                   </p>
                 </div>
+                <div className="px-4 py-3">
+                  <p className="text-[10px] font-semibold tracking-wide text-slate-500 uppercase">
+                    % Started
+                  </p>
+                  <p className="mt-0.5 text-lg tabular-nums text-slate-100">
+                    {pool?.percent_started != null ? `${pool.percent_started.toFixed(1)}%` : "—"}
+                  </p>
+                </div>
               </div>
             </div>
           </div>
