@@ -25,6 +25,9 @@ export interface AgentRunResult {
   toolCalls: ToolCallTrace[];
 }
 
+/** LangGraph step budget (model + tool hops). Default is ~25. */
+const AGENT_RECURSION_LIMIT = 100;
+
 function systemPrompt(draftId: string): string {
   return [
     "You are a fantasy football draft data analyst for this user's live snake draft.",
@@ -222,9 +225,10 @@ export async function runDraftChatAgent(params: {
 }): Promise<AgentRunResult> {
   const agent = createAgentForDraft(params.draftId, params.llm);
 
-  const result = await agent.invoke({
-    messages: toLangChainMessages(params.messages),
-  });
+  const result = await agent.invoke(
+    { messages: toLangChainMessages(params.messages) },
+    { recursionLimit: AGENT_RECURSION_LIMIT },
+  );
 
   const resultMessages = (result.messages ?? []) as BaseMessage[];
   const lastAi = [...resultMessages].reverse().find((m) => AIMessage.isInstance(m));
@@ -259,7 +263,7 @@ export async function* streamDraftChatAgent(params: {
   const runPromise = (async () => {
     const run = await agent.streamEvents(
       { messages: toLangChainMessages(params.messages) },
-      { version: "v3", signal: params.signal },
+      { version: "v3", signal: params.signal, recursionLimit: AGENT_RECURSION_LIMIT },
     );
 
     const messagePump = (async () => {
@@ -382,7 +386,7 @@ export async function* streamLeagueChatAgent(params: {
   const runPromise = (async () => {
     const run = await agent.streamEvents(
       { messages: toLangChainMessages(params.messages) },
-      { version: "v3", signal: params.signal },
+      { version: "v3", signal: params.signal, recursionLimit: AGENT_RECURSION_LIMIT },
     );
 
     const messagePump = (async () => {

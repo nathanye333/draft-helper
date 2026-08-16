@@ -15,11 +15,22 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
 
+interface ToolCallVM {
+  id: string;
+  name: string;
+  input: unknown;
+  output?: string;
+  status: "running" | "done";
+}
+
 interface ChatMessage {
   id: string;
   role: "user" | "assistant";
   content: string;
+  reasoning?: string;
+  toolCalls?: ToolCallVM[];
   streaming?: boolean;
+  stopped?: boolean;
 }
 
 interface SessionSummary {
@@ -33,6 +44,8 @@ interface StoredMessagePayload {
   id: string;
   role: "user" | "assistant";
   content: string;
+  reasoning?: string | null;
+  toolCalls?: ToolCallVM[] | null;
   stopped?: boolean;
 }
 
@@ -63,7 +76,90 @@ function storedToChatMessage(m: StoredMessagePayload): ChatMessage {
     id: m.id,
     role: m.role,
     content: m.content || (m.stopped ? "Stopped." : ""),
+    reasoning: m.reasoning ?? undefined,
+    toolCalls: m.toolCalls ?? undefined,
+    stopped: m.stopped,
   };
+}
+
+function ThinkingBlock({
+  text,
+  streaming,
+}: {
+  text: string;
+  streaming?: boolean;
+}) {
+  const [open, setOpen] = useState(true);
+  if (!text && !streaming) return null;
+
+  return (
+    <div className="mb-2 overflow-hidden rounded-md border border-slate-800/80 bg-slate-900/40">
+      <button
+        type="button"
+        className="flex w-full items-center justify-between gap-2 px-2.5 py-1.5 text-left text-xs text-slate-400 hover:bg-slate-800/40"
+        onClick={() => setOpen((o) => !o)}
+      >
+        <span className="font-medium text-slate-300">
+          {streaming && !text ? "Thinking…" : "Thoughts"}
+          {streaming ? (
+            <span className="ml-1 inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-400 align-middle" />
+          ) : null}
+        </span>
+        <span className="text-slate-500">{open ? "Hide" : "Show"}</span>
+      </button>
+      {open ? (
+        <div className="border-t border-slate-800/80 px-2.5 py-2 text-xs leading-relaxed whitespace-pre-wrap text-slate-500 italic">
+          {text || (streaming ? "…" : "")}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function ToolCallRows({ tools }: { tools: ToolCallVM[] }) {
+  if (tools.length === 0) return null;
+  return (
+    <div className="mb-2 space-y-1.5">
+      {tools.map((t) => (
+        <details
+          key={t.id}
+          className="rounded-md border border-slate-800/80 bg-slate-900/30 text-xs open:bg-slate-900/50"
+        >
+          <summary className="cursor-pointer list-none px-2.5 py-1.5 text-slate-300 marker:content-none [&::-webkit-details-marker]:hidden">
+            <span className="mr-2 inline-flex items-center gap-1.5">
+              <span
+                className={
+                  t.status === "running"
+                    ? "inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-amber-400"
+                    : "inline-block h-1.5 w-1.5 rounded-full bg-emerald-500"
+                }
+              />
+              <span className="font-mono text-[11px] text-slate-200">{t.name}</span>
+            </span>
+            <span className="text-slate-500">
+              {t.status === "running" ? "running…" : "done"}
+            </span>
+          </summary>
+          <div className="space-y-2 border-t border-slate-800/80 px-2.5 py-2 text-[11px] text-slate-400">
+            <pre className="max-h-28 overflow-auto whitespace-pre-wrap break-all rounded bg-slate-950/60 p-2">
+              {(() => {
+                try {
+                  return JSON.stringify(t.input, null, 2) ?? "null";
+                } catch {
+                  return String(t.input);
+                }
+              })()}
+            </pre>
+            {t.output ? (
+              <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-all rounded bg-slate-950/60 p-2 text-slate-300">
+                {t.output}
+              </pre>
+            ) : null}
+          </div>
+        </details>
+      ))}
+    </div>
+  );
 }
 
 export function SeasonChatPanel({ leagueId }: { leagueId: string }) {
@@ -240,11 +336,25 @@ export function SeasonChatPanel({ leagueId }: { leagueId: string }) {
     const userMsg: ChatMessage = { id: newId(), role: "user", content: text };
     const assistantId = newId();
     const history = [...messages, userMsg];
-    setMessages([...history, { id: assistantId, role: "assistant", content: "", streaming: true }]);
+    setMessages([
+      ...history,
+      {
+        id: assistantId,
+        role: "assistant",
+        content: "",
+        reasoning: "",
+        toolCalls: [],
+        streaming: true,
+      },
+    ]);
     setBusy(true);
 
     const controller = new AbortController();
     abortRef.current = controller;
+
+    function patchAssistant(id: string, updater: (m: ChatMessage) => ChatMessage) {
+      setMessages((prev) => prev.map((m) => (m.id === id ? updater(m) : m)));
+    }
 
     try {
       const res = await fetch(`/api/leagues/${leagueId}/chat`, {
@@ -270,7 +380,6 @@ export function SeasonChatPanel({ leagueId }: { leagueId: string }) {
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
-      let assistantContent = "";
 
       while (true) {
         const { done, value } = await reader.read();
@@ -280,39 +389,119 @@ export function SeasonChatPanel({ leagueId }: { leagueId: string }) {
         buffer = lines.pop() ?? "";
         for (const line of lines) {
           if (!line.trim()) continue;
-          const event = JSON.parse(line) as DraftAgentStreamEvent;
+          let event: DraftAgentStreamEvent;
+          try {
+            event = JSON.parse(line) as DraftAgentStreamEvent;
+          } catch {
+            continue;
+          }
+
           if (event.type === "session") {
             setActiveSessionId(event.sessionId);
+          } else if (event.type === "reasoning") {
+            const delta = event.delta;
+            patchAssistant(assistantId, (m) => ({
+              ...m,
+              reasoning: `${m.reasoning ?? ""}${delta}`,
+            }));
           } else if (event.type === "token") {
-            assistantContent += event.delta;
-            setMessages((prev) =>
-              prev.map((m) =>
-                m.id === assistantId ? { ...m, content: assistantContent, streaming: true } : m,
+            const delta = event.delta;
+            patchAssistant(assistantId, (m) => ({
+              ...m,
+              content: `${m.content}${delta}`,
+            }));
+          } else if (event.type === "tool_start") {
+            const start = event;
+            patchAssistant(assistantId, (m) => ({
+              ...m,
+              toolCalls: [
+                ...(m.toolCalls ?? []),
+                {
+                  id: start.id,
+                  name: start.name,
+                  input: start.input,
+                  status: "running",
+                },
+              ],
+            }));
+          } else if (event.type === "tool_end") {
+            const end = event;
+            patchAssistant(assistantId, (m) => ({
+              ...m,
+              toolCalls: (m.toolCalls ?? []).map((t) =>
+                t.id === end.id
+                  ? { ...t, output: end.output, status: "done" as const }
+                  : t,
               ),
-            );
+            }));
           } else if (event.type === "error") {
             setError(event.message);
+            patchAssistant(assistantId, (m) => ({
+              ...m,
+              content: m.content.trim() || event.message,
+            }));
+          } else if (event.type === "done") {
+            const stopped = Boolean(event.stopped);
+            patchAssistant(assistantId, (m) => ({
+              ...m,
+              streaming: false,
+              stopped,
+              content:
+                m.content.trim() ||
+                (stopped ? "Stopped." : m.reasoning ? "" : "No response from the model."),
+            }));
           }
         }
       }
 
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.id === assistantId
-            ? { ...m, content: assistantContent.trim() || "No response.", streaming: false }
-            : m,
-        ),
+      const trailing = buffer.trim();
+      if (trailing) {
+        try {
+          const event = JSON.parse(trailing) as DraftAgentStreamEvent;
+          if (event.type === "error") {
+            setError(event.message);
+            patchAssistant(assistantId, (m) => ({
+              ...m,
+              streaming: false,
+              content: m.content.trim() || event.message,
+            }));
+          } else if (event.type === "done") {
+            patchAssistant(assistantId, (m) => ({
+              ...m,
+              streaming: false,
+              stopped: Boolean(event.stopped),
+              content:
+                m.content.trim() ||
+                (event.stopped ? "Stopped." : "No response from the model."),
+            }));
+          } else if (event.type === "token") {
+            patchAssistant(assistantId, (m) => ({
+              ...m,
+              content: `${m.content}${event.delta}`,
+            }));
+          } else if (event.type === "reasoning") {
+            patchAssistant(assistantId, (m) => ({
+              ...m,
+              reasoning: `${m.reasoning ?? ""}${event.delta}`,
+            }));
+          }
+        } catch {
+          // ignore incomplete trailing JSON
+        }
+      }
+
+      patchAssistant(assistantId, (m) =>
+        m.streaming ? { ...m, streaming: false, content: m.content.trim() || "No response." } : m,
       );
       void refreshSessionsList();
     } catch (err) {
       if ((err as Error).name === "AbortError") {
-        setMessages((prev) =>
-          prev.map((m) =>
-            m.id === assistantId
-              ? { ...m, content: m.content || "Stopped.", streaming: false }
-              : m,
-          ),
-        );
+        patchAssistant(assistantId, (m) => ({
+          ...m,
+          content: m.content || "Stopped.",
+          streaming: false,
+          stopped: true,
+        }));
         void refreshSessionsList();
       } else {
         setError(err instanceof Error ? err.message : "Chat failed");
@@ -424,18 +613,36 @@ export function SeasonChatPanel({ leagueId }: { leagueId: string }) {
           </p>
         ) : null}
         {messages.map((m) => (
-          <div
-            key={m.id}
-            className={
-              m.role === "user"
-                ? "ml-8 rounded-lg bg-slate-800 px-3 py-2 text-sm"
-                : "mr-4 rounded-lg border border-slate-800 bg-slate-900/60 px-3 py-2 text-sm whitespace-pre-wrap"
-            }
-          >
-            {m.content}
-            {m.streaming ? (
-              <span className="ml-1 inline-block h-2 w-2 animate-pulse rounded-full bg-emerald-400" />
-            ) : null}
+          <div key={m.id} className="px-0.5">
+            {m.role === "user" ? (
+              <div className="ml-8 rounded-lg bg-slate-800 px-3 py-2 text-sm">
+                <p className="whitespace-pre-wrap">{m.content}</p>
+              </div>
+            ) : (
+              <div className="mr-4 text-sm text-slate-100">
+                <ThinkingBlock
+                  text={m.reasoning ?? ""}
+                  streaming={Boolean(m.streaming && !(m.content || "").trim())}
+                />
+                <ToolCallRows tools={m.toolCalls ?? []} />
+                {m.content ? (
+                  <div className="rounded-lg border border-slate-800 bg-slate-900/60 px-3 py-2 whitespace-pre-wrap">
+                    {m.content}
+                    {m.streaming ? (
+                      <span className="ml-1 inline-block h-2 w-2 animate-pulse rounded-full bg-emerald-400" />
+                    ) : null}
+                  </div>
+                ) : m.streaming ? (
+                  <p className="text-xs text-slate-500">
+                    Generating
+                    <span className="ml-0.5 inline-block h-3.5 w-[2px] animate-pulse bg-emerald-400 align-middle" />
+                  </p>
+                ) : null}
+                {m.stopped ? (
+                  <p className="mt-1 text-[11px] text-slate-500">Stopped</p>
+                ) : null}
+              </div>
+            )}
           </div>
         ))}
         <div ref={bottomRef} />
