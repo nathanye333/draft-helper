@@ -8,6 +8,7 @@ import {
   saveLlmSettings,
   type StoredLlmSettings,
 } from "@/lib/agent/llm-settings";
+import { fallbackModels } from "@/lib/agent/list-models";
 import type { DraftAgentStreamEvent } from "@/lib/agent/stream-types";
 import { readWorkingLineup } from "@/lib/league/working-lineup";
 import { Button } from "@/components/ui/button";
@@ -178,9 +179,16 @@ export function SeasonChatPanel({ leagueId }: { leagueId: string }) {
   const [error, setError] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [hasServerOpenAiKey, setHasServerOpenAiKey] = useState(false);
+  const [modelOptions, setModelOptions] = useState<string[]>(() =>
+    fallbackModels(settings.provider),
+  );
+  const [modelsLoading, setModelsLoading] = useState(false);
+  const [modelsError, setModelsError] = useState<string | null>(null);
+  const [modelsSource, setModelsSource] = useState<"live" | "fallback">("fallback");
   const abortRef = useRef<AbortController | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const sessionsMenuRef = useRef<HTMLDivElement>(null);
+  const scanSeq = useRef(0);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -306,17 +314,112 @@ export function SeasonChatPanel({ leagueId }: { leagueId: string }) {
       try {
         const res = await fetch("/api/llm/models");
         const data = (await res.json()) as { ok?: boolean; hasServerOpenAiKey?: boolean };
-        if (!cancelled && data.ok) {
+        if (!cancelled && res.ok && data.ok) {
           setHasServerOpenAiKey(Boolean(data.hasServerOpenAiKey));
         }
       } catch {
-        // ignore — send still works if server key resolves on the chat route
+        if (!cancelled) setHasServerOpenAiKey(false);
       }
     })();
     return () => {
       cancelled = true;
     };
   }, []);
+
+  async function scanModels(opts?: { silent?: boolean }) {
+    const seq = ++scanSeq.current;
+    if (!opts?.silent) {
+      setModelsLoading(true);
+      setModelsError(null);
+    }
+
+    try {
+      if (settings.provider === "ollama") {
+        const base = (settings.baseUrl.trim() || "http://127.0.0.1:11434").replace(/\/$/, "");
+        const res = await fetch(`${base}/api/tags`);
+        if (!res.ok) {
+          throw new Error(`Ollama returned ${res.status}. Is it running at ${base}?`);
+        }
+        const data = (await res.json()) as { models?: Array<{ name?: string; model?: string }> };
+        const models = [
+          ...new Set(
+            (data.models ?? [])
+              .map((m) => (m.name ?? m.model ?? "").trim())
+              .filter(Boolean)
+              .sort((a, b) => a.localeCompare(b)),
+          ),
+        ];
+        if (seq !== scanSeq.current) return;
+        if (models.length === 0) {
+          setModelOptions(fallbackModels("ollama"));
+          setModelsSource("fallback");
+          setModelsError("No models found. Run: ollama pull llama3.1");
+          return;
+        }
+        setModelOptions(models);
+        setModelsSource("live");
+        setModelsError(null);
+        if (!models.includes(settings.model)) {
+          persistSettings({ ...settings, model: models[0]! });
+        }
+        return;
+      }
+
+      const res = await fetch("/api/llm/models", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          provider: settings.provider,
+          baseUrl: settings.baseUrl || undefined,
+          apiKey: settings.apiKey || undefined,
+        }),
+      });
+      const data = (await res.json()) as {
+        ok: boolean;
+        models?: string[];
+        message?: string;
+      };
+      if (seq !== scanSeq.current) return;
+      if (!res.ok || !data.ok || !data.models) {
+        throw new Error(data.message ?? `Model scan failed (${res.status})`);
+      }
+      if (data.models.length === 0) {
+        setModelOptions(fallbackModels("openai"));
+        setModelsSource("fallback");
+        setModelsError("No chat models returned — showing common defaults.");
+        return;
+      }
+      setModelOptions(data.models);
+      setModelsSource("live");
+      setModelsError(null);
+      if (!data.models.includes(settings.model)) {
+        persistSettings({ ...settings, model: data.models[0]! });
+      }
+    } catch (err) {
+      if (seq !== scanSeq.current) return;
+      setModelOptions(fallbackModels(settings.provider));
+      setModelsSource("fallback");
+      setModelsError(err instanceof Error ? err.message : "Could not scan models");
+    } finally {
+      if (seq === scanSeq.current) setModelsLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!showSettings) return;
+    const t = window.setTimeout(() => {
+      void scanModels({ silent: false });
+    }, 250);
+    return () => window.clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional scan triggers
+  }, [showSettings, settings.provider, settings.baseUrl, settings.apiKey]);
+
+  const selectModels = useMemo(() => {
+    if (settings.model && !modelOptions.includes(settings.model)) {
+      return [settings.model, ...modelOptions];
+    }
+    return modelOptions;
+  }, [modelOptions, settings.model]);
 
   const needsClientOpenAiKey =
     settings.provider === "openai" && !settings.apiKey.trim() && !hasServerOpenAiKey;
@@ -327,6 +430,23 @@ export function SeasonChatPanel({ leagueId }: { leagueId: string }) {
     if (needsClientOpenAiKey) return false;
     return true;
   }, [input, busy, settings.model, settings.provider, needsClientOpenAiKey]);
+
+  function updateSettings(patch: Partial<StoredLlmSettings>) {
+    persistSettings({ ...settings, ...patch });
+  }
+
+  function onProviderChange(provider: StoredLlmSettings["provider"]) {
+    const defaults = providerDefaults(provider);
+    persistSettings({
+      ...settings,
+      provider,
+      model: defaults.model,
+      baseUrl: defaults.baseUrl,
+    });
+    setModelOptions(fallbackModels(provider));
+    setModelsSource("fallback");
+    setModelsError(null);
+  }
 
   async function send() {
     const text = input.trim();
@@ -571,20 +691,58 @@ export function SeasonChatPanel({ leagueId }: { leagueId: string }) {
             <Label>Provider</Label>
             <Select
               value={settings.provider}
-              onChange={(e) => {
-                const provider = e.target.value as StoredLlmSettings["provider"];
-                persistSettings({ ...settings, provider, ...providerDefaults(provider) });
-              }}
+              onChange={(e) => onProviderChange(e.target.value as StoredLlmSettings["provider"])}
             >
               <option value="openai">OpenAI-compatible</option>
               <option value="ollama">Ollama</option>
             </Select>
           </div>
           <div>
-            <Label>Model</Label>
-            <Input
+            <div className="flex items-center justify-between gap-2">
+              <Label>Model</Label>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                disabled={
+                  modelsLoading ||
+                  (settings.provider === "openai" &&
+                    !settings.apiKey.trim() &&
+                    !hasServerOpenAiKey)
+                }
+                onClick={() => void scanModels()}
+              >
+                {modelsLoading ? "Scanning…" : "Refresh"}
+              </Button>
+            </div>
+            <Select
               value={settings.model}
-              onChange={(e) => persistSettings({ ...settings, model: e.target.value })}
+              onChange={(e) => updateSettings({ model: e.target.value })}
+              disabled={selectModels.length === 0}
+            >
+              {selectModels.map((id) => (
+                <option key={id} value={id}>
+                  {id}
+                </option>
+              ))}
+            </Select>
+            <p className="text-xs text-slate-500">
+              {modelsSource === "live"
+                ? `Showing ${selectModels.length} models.`
+                : "Fallback list until scan succeeds."}
+              {modelsError ? ` ${modelsError}` : ""}
+            </p>
+          </div>
+          <div>
+            <Label>Base URL</Label>
+            <Input
+              value={settings.baseUrl}
+              onChange={(e) => updateSettings({ baseUrl: e.target.value })}
+              placeholder={
+                settings.provider === "ollama"
+                  ? "http://127.0.0.1:11434"
+                  : "https://api.openai.com/v1"
+              }
             />
           </div>
           {settings.provider === "openai" ? (
@@ -598,7 +756,7 @@ export function SeasonChatPanel({ leagueId }: { leagueId: string }) {
                 placeholder={
                   hasServerOpenAiKey ? "Leave blank to use account key" : "sk-…"
                 }
-                onChange={(e) => persistSettings({ ...settings, apiKey: e.target.value })}
+                onChange={(e) => updateSettings({ apiKey: e.target.value })}
               />
             </div>
           ) : null}
