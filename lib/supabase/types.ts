@@ -174,3 +174,41 @@ export interface PlayerProjectionWeekly {
   proj_stats: Record<string, number> | null;
   synced_at: string;
 }
+
+export type LeaguePlayerOwnership = "ONTEAM" | "WAIVERS" | "FREEAGENT";
+
+export interface EspnPlayer {
+  espn_player_id: number;
+  name: string;
+  position: string;
+  nfl_team: string | null;
+  headshot_url: string | null;
+  updated_at: string;
+}
+
+export interface LeaguePlayerPoolRow {
+  id: string;
+  league_id: string;
+  espn_player_id: number;
+  ownership: LeaguePlayerOwnership;
+  espn_team_id: number | null;
+  percent_owned: number | null;
+  injury_status: string | null;
+  week_projected: number | null;
+  week_actual: number | null;
+  season_projected: number | null;
+  season_actual: number | null;
+  fp_player_id: string | null;
+  synced_at: string;
+}
+
+export interface EspnPlayerWeekPoints {
+  id: string;
+  league_id: string;
+  espn_player_id: number;
+  season: number;
+  week: number;
+  actual_points: number | null;
+  projected_points: number | null;
+  synced_at: string;
+}

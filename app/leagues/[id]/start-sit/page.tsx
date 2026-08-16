@@ -4,6 +4,7 @@ import { fetchLeagueBundle, rosterSlotsFromLeague, userTeam } from "@/lib/league
 import { suggestStartSit } from "@/lib/analytics/start-sit";
 import { LeagueNav } from "@/components/league/league-nav";
 import { SeasonAgentSection } from "@/components/league/season-agent-section";
+import { PlayerLink, TeamLink } from "@/components/league/entity-links";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
 export default async function StartSitPage({
@@ -41,21 +42,30 @@ export default async function StartSitPage({
       )
     : undefined;
   let opponentName: string | null = null;
+  let opponentTeamId: number | null = null;
   if (opp && mine) {
-    const oppId =
+    opponentTeamId =
       opp.home_espn_team_id === mine.espn_team_id
         ? opp.away_espn_team_id
         : opp.home_espn_team_id;
-    opponentName = bundle.teams.find((t) => t.espn_team_id === oppId)?.name ?? null;
+    opponentName = bundle.teams.find((t) => t.espn_team_id === opponentTeamId)?.name ?? null;
   }
 
   return (
-    <div className="mx-auto max-w-5xl px-4 py-8">
+    <div className="mx-auto max-w-5xl px-4 py-8 pb-28">
       <h1 className="mb-1 text-2xl font-semibold">Start / Sit</h1>
       <p className="mb-4 text-sm text-slate-400">
         Week {bundle.league.current_week ?? "—"}
-        {opponentName ? ` vs ${opponentName}` : ""} · projected starters{" "}
-        {suggestion.projectedStarterPoints.toFixed(1)} pts
+        {opponentName && opponentTeamId != null ? (
+          <>
+            {" "}
+            vs{" "}
+            <TeamLink leagueId={id} espnTeamId={opponentTeamId}>
+              {opponentName}
+            </TeamLink>
+          </>
+        ) : null}{" "}
+        · projected starters {suggestion.projectedStarterPoints.toFixed(1)} pts
       </p>
       <LeagueNav leagueId={id} current="start-sit" />
 
@@ -69,7 +79,9 @@ export default async function StartSitPage({
               <div key={p.espnPlayerId} className="flex justify-between gap-2">
                 <span>
                   <span className="text-xs text-slate-500">{p.currentSlot}</span>{" "}
-                  {p.name}
+                  <PlayerLink leagueId={id} espnPlayerId={p.espnPlayerId}>
+                    {p.name}
+                  </PlayerLink>
                 </span>
                 <span className="text-slate-400">
                   {p.weekProj != null ? p.weekProj.toFixed(1) : "—"}
@@ -85,7 +97,9 @@ export default async function StartSitPage({
           <CardContent className="space-y-2 text-sm">
             {suggestion.bench.map((p) => (
               <div key={p.espnPlayerId} className="flex justify-between gap-2">
-                <span>{p.name}</span>
+                <PlayerLink leagueId={id} espnPlayerId={p.espnPlayerId}>
+                  {p.name}
+                </PlayerLink>
                 <span className="text-slate-400">
                   {p.weekProj != null ? p.weekProj.toFixed(1) : "—"}
                 </span>

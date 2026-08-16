@@ -4,6 +4,7 @@ import { fetchLeagueBundle, userTeam } from "@/lib/league/data";
 import { LeagueNav } from "@/components/league/league-nav";
 import { LeagueSyncButtons } from "@/components/league/league-sync-buttons";
 import { SeasonAgentSection } from "@/components/league/season-agent-section";
+import { PlayerLink, TeamLink } from "@/components/league/entity-links";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 
@@ -26,7 +27,7 @@ export default async function LeagueOverviewPage({
     : [];
 
   return (
-    <div className="mx-auto max-w-5xl px-4 py-8">
+    <div className="mx-auto max-w-5xl px-4 py-8 pb-28">
       <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="text-2xl font-semibold">{bundle.league.name}</h1>
@@ -50,9 +51,13 @@ export default async function LeagueOverviewPage({
               .sort((a, b) => (b.wins - a.wins) || (b.points_for ?? 0) - (a.points_for ?? 0))
               .map((t) => (
                 <div key={t.id} className="flex items-center justify-between gap-2">
-                  <span className={t.is_user_team ? "font-medium text-emerald-300" : ""}>
+                  <TeamLink
+                    leagueId={id}
+                    espnTeamId={t.espn_team_id}
+                    className={t.is_user_team ? "font-medium" : ""}
+                  >
                     {t.name}
-                  </span>
+                  </TeamLink>
                   <span className="text-slate-400">
                     {t.wins}-{t.losses}-{t.ties}
                   </span>
@@ -63,9 +68,20 @@ export default async function LeagueOverviewPage({
 
         <Card>
           <CardHeader>
-            <CardTitle>{mine ? `${mine.name} roster` : "Your roster"}</CardTitle>
+            <CardTitle>
+              {mine ? (
+                <>
+                  <TeamLink leagueId={id} espnTeamId={mine.espn_team_id}>
+                    {mine.name}
+                  </TeamLink>{" "}
+                  roster
+                </>
+              ) : (
+                "Your roster"
+              )}
+            </CardTitle>
           </CardHeader>
-          <CardContent className="space-y-1.5 text-sm">
+          <CardContent className="max-h-[28rem] space-y-1.5 overflow-y-auto text-sm">
             {myRoster.length === 0 ? (
               <p className="text-slate-500">No roster yet — sync ESPN.</p>
             ) : (
@@ -76,7 +92,13 @@ export default async function LeagueOverviewPage({
                 return (
                   <div key={r.id} className="flex items-center justify-between gap-2">
                     <div className="min-w-0">
-                      <span className="font-medium">{r.player_name}</span>
+                      <PlayerLink
+                        leagueId={id}
+                        espnPlayerId={r.espn_player_id}
+                        className="font-medium"
+                      >
+                        {r.player_name}
+                      </PlayerLink>
                       <span className="ml-2 text-xs text-slate-500">
                         {r.position}
                         {r.nfl_team ? ` · ${r.nfl_team}` : ""}

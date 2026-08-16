@@ -1,10 +1,15 @@
 import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { encryptSecret, decryptSecret } from "@/lib/crypto/secrets";
 import {
   EspnApiError,
   fetchEspnLeagueSnapshot,
   type EspnCookies,
 } from "@/lib/espn/client";
+import {
+  fetchEspnPlayerUniverse,
+  summaryFromUniverse,
+} from "@/lib/espn/player-universe";
 import { resolveEspnToFpIds } from "@/lib/espn/id-map";
 import { syncProjectionsForSeason } from "@/lib/fantasypros/projections-sync";
 import type { ScoringFormat } from "@/lib/supabase/types";
@@ -94,7 +99,7 @@ export async function connectEspnLeague(input: ConnectEspnInput): Promise<SyncLe
     return { ok: false, reason: "api_error", message: credError.message };
   }
 
-  return persistSnapshot(league.id, snapshot, input.myEspnTeamId, scoring);
+  return persistSnapshot(league.id, snapshot, input.myEspnTeamId, scoring, cookies, String(input.espnLeagueId));
 }
 
 export async function syncEspnLeague(leagueId: string): Promise<SyncLeagueResult> {
@@ -165,6 +170,8 @@ export async function syncEspnLeague(leagueId: string): Promise<SyncLeagueResult
     snapshot,
     league.my_espn_team_id as number | null,
     snapshot.scoring,
+    cookies,
+    String(league.espn_league_id),
   );
 }
 
@@ -173,6 +180,8 @@ async function persistSnapshot(
   snapshot: Awaited<ReturnType<typeof fetchEspnLeagueSnapshot>>,
   myEspnTeamId: number | null,
   scoring: ScoringFormat,
+  cookies: EspnCookies,
+  espnLeagueId: string,
 ): Promise<SyncLeagueResult> {
   const supabase = await createClient();
   const syncedAt = new Date().toISOString();
@@ -246,6 +255,26 @@ async function persistSnapshot(
 
   await supabase.from("leagues").update({ last_synced_at: syncedAt }).eq("id", leagueId);
 
+  // ESPN projections + weekly fantasy points (this year + last year).
+  try {
+    await persistEspnPlayerUniverse({
+      leagueId,
+      espnLeagueId,
+      season: snapshot.season,
+      currentWeek: snapshot.currentWeek,
+      cookies,
+      rosterEspnIds: new Set(snapshot.rosterEntries.map((e) => e.espnPlayerId)),
+      rosterTeamByPlayer: new Map(
+        snapshot.rosterEntries.map((e) => [e.espnPlayerId, e.espnTeamId]),
+      ),
+    });
+  } catch (err) {
+    console.warn(
+      "ESPN player universe sync failed:",
+      err instanceof Error ? err.message : err,
+    );
+  }
+
   // Best-effort FP projections refresh (admin writes).
   try {
     const week = snapshot.currentWeek && snapshot.currentWeek > 0 ? snapshot.currentWeek : 0;
@@ -268,6 +297,122 @@ async function persistSnapshot(
     rosterCount: rosterRows.length,
     syncedAt,
   };
+}
+
+async function persistEspnPlayerUniverse(params: {
+  leagueId: string;
+  espnLeagueId: string;
+  season: number;
+  currentWeek: number | null;
+  cookies: EspnCookies;
+  rosterEspnIds: Set<number>;
+  rosterTeamByPlayer?: Map<number, number>;
+}) {
+  if (!params.espnLeagueId) return;
+
+  const universe = await fetchEspnPlayerUniverse({
+    leagueId: params.espnLeagueId,
+    season: params.season,
+    cookies: params.cookies,
+    currentWeek: params.currentWeek,
+  });
+
+  // Mark ownership ONTEAM if we saw them on a roster (API status can lag).
+  for (const row of universe) {
+    if (params.rosterEspnIds.has(row.espnPlayerId)) {
+      row.ownership = "ONTEAM";
+      const teamId = params.rosterTeamByPlayer?.get(row.espnPlayerId);
+      if (teamId != null) row.espnTeamId = teamId;
+    }
+  }
+
+  const admin = createAdminClient();
+  const playerRows = universe.map((p) => ({
+    espn_player_id: p.espnPlayerId,
+    name: p.name,
+    position: p.position,
+    nfl_team: p.nflTeam,
+    headshot_url: p.headshotUrl,
+  }));
+
+  if (playerRows.length > 0) {
+    const { error } = await admin.from("espn_players").upsert(playerRows, {
+      onConflict: "espn_player_id",
+    });
+    if (error) throw new Error(error.message);
+  }
+
+  const fpMap = await resolveEspnToFpIds(
+    universe.map((p) => ({
+      espnPlayerId: p.espnPlayerId,
+      playerName: p.name,
+      nflTeam: p.nflTeam,
+    })),
+  );
+
+  const supabase = await createClient();
+  const syncedAt = new Date().toISOString();
+
+  await supabase.from("league_player_pool").delete().eq("league_id", params.leagueId);
+  await supabase.from("espn_player_week_points").delete().eq("league_id", params.leagueId);
+
+  const poolRows = universe.map((p) => {
+    const summary = summaryFromUniverse(p, params.season, params.currentWeek);
+    return {
+      league_id: params.leagueId,
+      espn_player_id: p.espnPlayerId,
+      ownership: p.ownership,
+      espn_team_id: p.espnTeamId,
+      percent_owned: p.percentOwned,
+      injury_status: p.injuryStatus,
+      week_projected: summary.weekProjected,
+      week_actual: summary.weekActual,
+      season_projected: summary.seasonProjected,
+      season_actual: summary.seasonActual,
+      fp_player_id: fpMap.get(p.espnPlayerId) ?? null,
+      synced_at: syncedAt,
+    };
+  });
+
+  // Chunk inserts to avoid payload limits.
+  for (let i = 0; i < poolRows.length; i += 400) {
+    const chunk = poolRows.slice(i, i + 400);
+    const { error } = await supabase.from("league_player_pool").insert(chunk);
+    if (error) throw new Error(error.message);
+  }
+
+  const weekRows: {
+    league_id: string;
+    espn_player_id: number;
+    season: number;
+    week: number;
+    actual_points: number | null;
+    projected_points: number | null;
+    synced_at: string;
+  }[] = [];
+
+  for (const p of universe) {
+    for (const [season, weeks] of p.pointsBySeason) {
+      for (const [week, pts] of weeks) {
+        if (pts.actual == null && pts.projected == null) continue;
+        weekRows.push({
+          league_id: params.leagueId,
+          espn_player_id: p.espnPlayerId,
+          season,
+          week,
+          actual_points: pts.actual,
+          projected_points: pts.projected,
+          synced_at: syncedAt,
+        });
+      }
+    }
+  }
+
+  for (let i = 0; i < weekRows.length; i += 500) {
+    const chunk = weekRows.slice(i, i + 500);
+    const { error } = await supabase.from("espn_player_week_points").insert(chunk);
+    if (error) throw new Error(error.message);
+  }
 }
 
 /** Update stored cookies without a full reconnect. */
