@@ -59,6 +59,27 @@ async function fetchText(url: string): Promise<string> {
   return res.text();
 }
 
+/** nflverse renamed weekly player stats assets; try current then legacy paths. */
+const PLAYER_STATS_URL_TEMPLATES = [
+  (season: number) =>
+    `https://github.com/nflverse/nflverse-data/releases/download/stats_player/stats_player_week_${season}.csv`,
+  (season: number) =>
+    `https://github.com/nflverse/nflverse-data/releases/download/player_stats/player_stats_${season}.csv`,
+] as const;
+
+async function fetchPlayerStatsCsv(season: number): Promise<string> {
+  const errors: string[] = [];
+  for (const tmpl of PLAYER_STATS_URL_TEMPLATES) {
+    const url = tmpl(season);
+    try {
+      return await fetchText(url);
+    } catch (err) {
+      errors.push(err instanceof Error ? err.message : String(err));
+    }
+  }
+  throw new Error(errors.join(" | "));
+}
+
 /**
  * Aggregate nflverse weekly player stats into defense-vs-position rows.
  * Exported for unit tests.
@@ -237,16 +258,12 @@ export async function syncNflMatchupData(season: number): Promise<SyncNflMatchup
   let statsSeason = season;
   let playerCsv: string;
   try {
-    playerCsv = await fetchText(
-      `https://github.com/nflverse/nflverse-data/releases/download/player_stats/player_stats_${statsSeason}.csv`,
-    );
+    playerCsv = await fetchPlayerStatsCsv(statsSeason);
   } catch (err) {
     if (season > 2000) {
       statsSeason = season - 1;
       try {
-        playerCsv = await fetchText(
-          `https://github.com/nflverse/nflverse-data/releases/download/player_stats/player_stats_${statsSeason}.csv`,
-        );
+        playerCsv = await fetchPlayerStatsCsv(statsSeason);
       } catch (err2) {
         return {
           ok: false,
@@ -269,9 +286,7 @@ export async function syncNflMatchupData(season: number): Promise<SyncNflMatchup
     // Preseason / empty file — try prior completed season.
     statsSeason = season - 1;
     try {
-      playerCsv = await fetchText(
-        `https://github.com/nflverse/nflverse-data/releases/download/player_stats/player_stats_${statsSeason}.csv`,
-      );
+      playerCsv = await fetchPlayerStatsCsv(statsSeason);
       aggregated = aggregateDefenseVsPosition(parseCsv(playerCsv), statsSeason);
     } catch {
       // keep empty
@@ -311,7 +326,7 @@ export async function syncNflMatchupData(season: number): Promise<SyncNflMatchup
     let scheduleCsv: string;
     try {
       scheduleCsv = await fetchText(
-        `https://github.com/nflverse/nflverse-data/releases/download/schedules/schedules.csv`,
+        `https://github.com/nflverse/nflverse-data/releases/download/schedules/games.csv`,
       );
     } catch {
       scheduleCsv = await fetchText(
