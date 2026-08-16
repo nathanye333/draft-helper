@@ -9,6 +9,7 @@ import {
   type StoredLlmSettings,
 } from "@/lib/agent/llm-settings";
 import type { DraftAgentStreamEvent } from "@/lib/agent/stream-types";
+import { readWorkingLineup } from "@/lib/league/working-lineup";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -116,6 +117,7 @@ export function SeasonChatPanel({ leagueId }: { leagueId: string }) {
           baseUrl: settings.baseUrl || undefined,
           // Empty string → omit so server can use allowlisted OPENAI_API_KEY
           apiKey: settings.apiKey.trim() || undefined,
+          workingLineup: readWorkingLineup(leagueId) ?? undefined,
         }),
       });
 

@@ -4,6 +4,7 @@ import { createChatModel, type LlmConfig } from "@/lib/agent/model";
 import { createDraftTools } from "@/lib/agent/tools";
 import { createLeagueTools } from "@/lib/agent/league-tools";
 import type { DraftAgentStreamEvent } from "@/lib/agent/stream-types";
+import type { WorkingLineupEntry } from "@/lib/league/working-lineup";
 
 export type { DraftAgentStreamEvent } from "@/lib/agent/stream-types";
 
@@ -124,24 +125,42 @@ function createAgentForDraft(draftId: string, llm: LlmConfig) {
   });
 }
 
-function leagueSystemPrompt(leagueId: string): string {
-  return [
+function leagueSystemPrompt(
+  leagueId: string,
+  workingLineup?: WorkingLineupEntry[] | null,
+): string {
+  const parts = [
     "You are a fantasy football season advisor for this user's ESPN-synced league.",
     `League id: ${leagueId}.`,
     "Rosters come from ESPN sync; projections from FantasyPros cached in Postgres — use tools, do not invent numbers.",
     "Be decisive: call tools and give a clear recommendation in one reply.",
     "Do not ask follow-up questions or menus. State short assumptions and proceed.",
-    "Use suggest_start_sit for lineup, evaluate_trade for trades, waiver_targets for FA/waivers.",
+    "Use get_my_roster for the current lineup (sandbox if the user rearranged Start/Sit), suggest_start_sit for the algorithmic recommendation, evaluate_trade for trades, waiver_targets for FA/waivers.",
     "Use web_search only for news/injuries outside cached data.",
-    "Cite week/ROS projection numbers from tools. You are read-only.",
-  ].join(" ");
+    "Cite week/ROS projection numbers from tools. You are read-only — lineup sandbox changes are temporary and not saved to ESPN.",
+  ];
+  if (workingLineup && workingLineup.length > 0) {
+    const lines = workingLineup.map(
+      (p) =>
+        `${p.slot}: ${p.name} (${p.position}${p.weekProj != null ? `, ${p.weekProj.toFixed(1)} proj` : ""})`,
+    );
+    parts.push(
+      "The user currently has this temporary Start/Sit sandbox arrangement (prefer get_my_roster / this list over ESPN sync when discussing their lineup):",
+      lines.join("; "),
+    );
+  }
+  return parts.join(" ");
 }
 
-function createAgentForLeague(leagueId: string, llm: LlmConfig) {
+function createAgentForLeague(
+  leagueId: string,
+  llm: LlmConfig,
+  workingLineup?: WorkingLineupEntry[] | null,
+) {
   return createAgent({
     model: createChatModel(llm),
-    tools: createLeagueTools(leagueId),
-    systemPrompt: leagueSystemPrompt(leagueId),
+    tools: createLeagueTools(leagueId, { workingLineup }),
+    systemPrompt: leagueSystemPrompt(leagueId, workingLineup),
   });
 }
 
@@ -346,13 +365,14 @@ export async function* streamLeagueChatAgent(params: {
   messages: ChatTurn[];
   llm: LlmConfig;
   signal?: AbortSignal;
+  workingLineup?: WorkingLineupEntry[] | null;
 }): AsyncGenerator<DraftAgentStreamEvent> {
   if (params.signal?.aborted) {
     yield { type: "done", stopped: true };
     return;
   }
 
-  const agent = createAgentForLeague(params.leagueId, params.llm);
+  const agent = createAgentForLeague(params.leagueId, params.llm, params.workingLineup);
   const queue = createEventQueue<DraftAgentStreamEvent>();
 
   const runPromise = (async () => {

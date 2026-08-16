@@ -5,12 +5,19 @@ import { suggestStartSit } from "@/lib/analytics/start-sit";
 import { evaluateTrade } from "@/lib/analytics/trade";
 import { rankWaiverTargets } from "@/lib/analytics/waivers";
 import { webSearch } from "@/lib/agent/web-search";
+import type { WorkingLineupEntry } from "@/lib/league/working-lineup";
+import { isStarterSlot } from "@/lib/league/slot-order";
 
 function json(data: unknown): string {
   return JSON.stringify(data, null, 2);
 }
 
-export function createLeagueTools(leagueId: string) {
+export function createLeagueTools(
+  leagueId: string,
+  options?: { workingLineup?: WorkingLineupEntry[] | null },
+) {
+  const workingLineup = options?.workingLineup ?? null;
+
   const get_league_snapshot = tool(
     async () => {
       const bundle = await fetchLeagueBundle(leagueId);
@@ -43,6 +50,25 @@ export function createLeagueTools(leagueId: string) {
 
   const get_my_roster = tool(
     async () => {
+      if (workingLineup && workingLineup.length > 0) {
+        const starterPts = workingLineup
+          .filter((p) => isStarterSlot(p.slot))
+          .reduce((sum, p) => sum + (p.weekProj ?? 0), 0);
+        return json({
+          source: "user_sandbox",
+          note: "User is experimenting with a temporary Start/Sit arrangement (not saved to ESPN).",
+          projectedStarterPoints: Number(starterPts.toFixed(2)),
+          players: workingLineup.map((p) => ({
+            espnPlayerId: p.espnPlayerId,
+            name: p.name,
+            position: p.position,
+            nflTeam: p.nflTeam,
+            slot: p.slot,
+            injury: p.injuryStatus,
+            weekProj: p.weekProj,
+          })),
+        });
+      }
       const bundle = await fetchLeagueBundle(leagueId);
       if (!bundle) return json({ error: "League not found" });
       const mine = userTeam(bundle);
@@ -64,11 +90,12 @@ export function createLeagueTools(leagueId: string) {
             ? bundle.projectionsByFpId.get(r.fp_player_id)?.ros ?? null
             : null,
         }));
-      return json({ team: mine.name, players: entries });
+      return json({ source: "espn_sync", team: mine.name, players: entries });
     },
     {
       name: "get_my_roster",
-      description: "Your roster with lineup slots and week/ROS projections.",
+      description:
+        "Your roster with lineup slots and week projections. Prefers the user's temporary Start/Sit sandbox arrangement when present.",
       schema: z.object({}),
     },
   );

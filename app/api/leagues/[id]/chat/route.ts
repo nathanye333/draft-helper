@@ -22,6 +22,20 @@ const chatBodySchema = z.object({
   model: z.string().min(1).max(200),
   baseUrl: z.string().max(500).optional(),
   apiKey: z.string().max(500).optional(),
+  workingLineup: z
+    .array(
+      z.object({
+        espnPlayerId: z.number().int(),
+        name: z.string(),
+        position: z.string(),
+        nflTeam: z.string().nullable().optional(),
+        slot: z.string(),
+        weekProj: z.number().nullable(),
+        injuryStatus: z.string().nullable().optional(),
+      }),
+    )
+    .max(40)
+    .optional(),
 });
 
 function encodeEvent(event: DraftAgentStreamEvent): Uint8Array {
@@ -57,7 +71,7 @@ export async function POST(
     );
   }
 
-  const { messages, provider, model, baseUrl, apiKey: clientApiKey } = parsed.data;
+  const { messages, provider, model, baseUrl, apiKey: clientApiKey, workingLineup } = parsed.data;
   const apiKey =
     provider === "openai"
       ? resolveOpenAiApiKey(user.email, clientApiKey)
@@ -86,6 +100,17 @@ export async function POST(
           messages,
           llm: { provider, model, baseUrl, apiKey },
           signal: request.signal,
+          workingLineup: workingLineup
+            ? workingLineup.map((p) => ({
+                espnPlayerId: p.espnPlayerId,
+                name: p.name,
+                position: p.position,
+                nflTeam: p.nflTeam ?? null,
+                slot: p.slot,
+                weekProj: p.weekProj,
+                injuryStatus: p.injuryStatus ?? null,
+              }))
+            : null,
         })) {
           if (request.signal.aborted) break;
           send(event);
