@@ -334,37 +334,6 @@ export function SeasonChatPanel({ leagueId }: { leagueId: string }) {
     }
 
     try {
-      if (settings.provider === "ollama") {
-        const base = (settings.baseUrl.trim() || "http://127.0.0.1:11434").replace(/\/$/, "");
-        const res = await fetch(`${base}/api/tags`);
-        if (!res.ok) {
-          throw new Error(`Ollama returned ${res.status}. Is it running at ${base}?`);
-        }
-        const data = (await res.json()) as { models?: Array<{ name?: string; model?: string }> };
-        const models = [
-          ...new Set(
-            (data.models ?? [])
-              .map((m) => (m.name ?? m.model ?? "").trim())
-              .filter(Boolean)
-              .sort((a, b) => a.localeCompare(b)),
-          ),
-        ];
-        if (seq !== scanSeq.current) return;
-        if (models.length === 0) {
-          setModelOptions(fallbackModels("ollama"));
-          setModelsSource("fallback");
-          setModelsError("No models found. Run: ollama pull llama3.1");
-          return;
-        }
-        setModelOptions(models);
-        setModelsSource("live");
-        setModelsError(null);
-        if (!models.includes(settings.model)) {
-          persistSettings({ ...settings, model: models[0]! });
-        }
-        return;
-      }
-
       const res = await fetch("/api/llm/models", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -384,9 +353,13 @@ export function SeasonChatPanel({ leagueId }: { leagueId: string }) {
         throw new Error(data.message ?? `Model scan failed (${res.status})`);
       }
       if (data.models.length === 0) {
-        setModelOptions(fallbackModels("openai"));
+        setModelOptions(fallbackModels(settings.provider));
         setModelsSource("fallback");
-        setModelsError("No chat models returned — showing common defaults.");
+        setModelsError(
+          settings.provider === "ollama"
+            ? "No models found. Run: ollama pull llama3.1"
+            : "No chat models returned — showing common defaults.",
+        );
         return;
       }
       setModelOptions(data.models);
