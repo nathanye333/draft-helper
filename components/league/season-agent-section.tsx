@@ -16,10 +16,22 @@ const SeasonChatPanel = dynamic(
 export function SeasonAgentSection({ leagueId }: { leagueId: string }) {
   const [open, setOpen] = useState(false);
   const [mountedChat, setMountedChat] = useState(false);
+  const [seedPrompt, setSeedPrompt] = useState<string | null>(null);
 
   useEffect(() => {
     if (open) setMountedChat(true);
   }, [open]);
+
+  useEffect(() => {
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent<{ leagueId: string; prompt: string }>).detail;
+      if (!detail || detail.leagueId !== leagueId) return;
+      setSeedPrompt(detail.prompt);
+      setOpen(true);
+    };
+    window.addEventListener("season-agent-prompt", handler);
+    return () => window.removeEventListener("season-agent-prompt", handler);
+  }, [leagueId]);
 
   useEffect(() => {
     if (!open) return;
@@ -72,7 +84,7 @@ export function SeasonAgentSection({ leagueId }: { leagueId: string }) {
         <div className="min-h-0 flex-1">
           {mountedChat ? (
             <ClientIslandErrorBoundary name="Season agent">
-              <SeasonChatPanel leagueId={leagueId} />
+              <SeasonChatPanel leagueId={leagueId} seedPrompt={seedPrompt} onSeedPromptConsumed={() => setSeedPrompt(null)} />
             </ClientIslandErrorBoundary>
           ) : null}
         </div>

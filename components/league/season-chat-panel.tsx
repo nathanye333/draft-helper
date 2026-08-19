@@ -163,7 +163,15 @@ function ToolCallRows({ tools }: { tools: ToolCallVM[] }) {
   );
 }
 
-export function SeasonChatPanel({ leagueId }: { leagueId: string }) {
+export function SeasonChatPanel({
+  leagueId,
+  seedPrompt,
+  onSeedPromptConsumed,
+}: {
+  leagueId: string;
+  seedPrompt?: string | null;
+  onSeedPromptConsumed?: () => void;
+}) {
   const settings = useSyncExternalStore(
     subscribeLlmSettings,
     getLlmSettingsSnapshot,
@@ -193,6 +201,12 @@ export function SeasonChatPanel({ leagueId }: { leagueId: string }) {
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, busy]);
+
+  useEffect(() => {
+    if (!seedPrompt?.trim()) return;
+    setInput(seedPrompt);
+    onSeedPromptConsumed?.();
+  }, [seedPrompt, onSeedPromptConsumed]);
 
   useEffect(() => {
     if (!sessionsOpen) return;
