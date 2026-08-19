@@ -14,17 +14,29 @@ const DEFAULT_OLLAMA_BASE = "http://127.0.0.1:11434";
  */
 export function temperatureForModel(model: string): number {
   const m = model.trim().toLowerCase();
-  if (
-    /^o[1-9]([-.]|$)/.test(m) ||
-    m.includes("o1-") ||
-    m.includes("o3-") ||
-    m.includes("o4-") ||
-    m.startsWith("gpt-5") ||
-    m.includes("reasoner")
-  ) {
-    return 1;
-  }
+  if (isReasoningCapableModel(m)) return 1;
   return 0.2;
+}
+
+/**
+ * OpenAI reasoning models (gpt-5*, o-series, etc.). On /v1/chat/completions, function
+ * tools are only supported when reasoning_effort is "none" — otherwise use /v1/responses.
+ * Our draft agent always uses tools, so force "none" here.
+ */
+export function isReasoningCapableModel(model: string): boolean {
+  const m = model.trim().toLowerCase();
+  if (/^o[1-9]([-.]|$)/.test(m) || m.includes("o1-") || m.includes("o3-") || m.includes("o4-")) {
+    return true;
+  }
+  if (m.startsWith("gpt-5") && !m.startsWith("gpt-5-chat")) return true;
+  if (m.includes("reasoner")) return true;
+  return false;
+}
+
+export function reasoningForToolCallingModel(
+  model: string,
+): { effort: "none" } | undefined {
+  return isReasoningCapableModel(model) ? { effort: "none" } : undefined;
 }
 
 /**
@@ -55,11 +67,13 @@ export function createChatModel(config: LlmConfig): BaseChatModel {
   }
 
   const baseURL = (config.baseUrl?.trim() || DEFAULT_OPENAI_BASE).replace(/\/$/, "");
+  const reasoning = reasoningForToolCallingModel(model);
   return new ChatOpenAI({
     model,
     apiKey,
     temperature,
     streaming: true,
+    ...(reasoning ? { reasoning } : {}),
     configuration: { baseURL },
   });
 }
