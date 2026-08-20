@@ -6,8 +6,8 @@ import { PrefetchRoutes } from "@/components/prefetch-routes";
 const TAB_SUFFIXES = ["", "/start-sit", "/trades", "/waivers", "/news"] as const;
 
 /**
- * Prefetches all league tabs. When ESPN data is already in Postgres
- * (`espnCached`), runs immediately and also warms the news API cache.
+ * Prefetch all league tabs, and warm the server's in-memory news cache when
+ * ESPN data is already synced.
  */
 export function LeagueRoutePrefetch({
   leagueId,

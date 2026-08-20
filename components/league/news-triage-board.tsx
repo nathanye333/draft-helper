@@ -60,6 +60,45 @@ function openSeasonAgent(leagueId: string, prompt: string) {
   );
 }
 
+function toMs(iso: string | null): number {
+  if (!iso) return Number.NEGATIVE_INFINITY;
+  const ms = Date.parse(iso);
+  return Number.isNaN(ms) ? Number.NEGATIVE_INFINITY : ms;
+}
+
+function applyClientFilters(params: {
+  feed: NewsItemView[];
+  sourceFilter: NewsSource | "all";
+  bucketFilter: NewsBucket | "all";
+  sortBy: "score" | "recency";
+  startersOnly: boolean;
+  unreadOnly: boolean;
+  search: string;
+}): NewsItemView[] {
+  const q = params.search.trim().toLowerCase();
+  const filtered = params.feed.filter((item) => {
+    if (params.sourceFilter !== "all" && item.source !== params.sourceFilter) return false;
+    if (params.bucketFilter !== "all" && item.bucket !== params.bucketFilter) return false;
+    if (params.startersOnly && !item.matchedPlayers.some((p) => p.scope === "roster")) return false;
+    if (params.unreadOnly && item.triageStatus !== "new") return false;
+    if (!q) return true;
+    const haystack = `${item.title} ${item.snippet}`.toLowerCase();
+    return haystack.includes(q);
+  });
+
+  const sorted = [...filtered];
+  if (params.sortBy === "score") {
+    sorted.sort((a, b) => b.score - a.score);
+  } else {
+    sorted.sort((a, b) => {
+      const diff = toMs(b.publishedAt) - toMs(a.publishedAt);
+      if (diff !== 0) return diff;
+      return b.score - a.score;
+    });
+  }
+  return sorted;
+}
+
 export function NewsTriageBoard({ leagueId }: { leagueId: string }) {
   const [data, setData] = useState<NewsTriageResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -84,12 +123,6 @@ export function NewsTriageBoard({ leagueId }: { leagueId: string }) {
       try {
         const params = new URLSearchParams();
         if (refresh) params.set("refresh", "1");
-        if (sourceFilter !== "all") params.set("source", sourceFilter);
-        if (bucketFilter !== "all") params.set("bucket", bucketFilter);
-        if (sortBy !== "score") params.set("sort", sortBy);
-        if (startersOnly) params.set("startersOnly", "1");
-        if (unreadOnly) params.set("unreadOnly", "1");
-        if (debouncedSearch.trim()) params.set("search", debouncedSearch.trim());
 
         const res = await fetch(`/api/leagues/${leagueId}/news?${params.toString()}`);
         if (!res.ok) {
@@ -104,23 +137,36 @@ export function NewsTriageBoard({ leagueId }: { leagueId: string }) {
         setLoading(false);
       }
     },
-    [leagueId, sourceFilter, bucketFilter, sortBy, startersOnly, unreadOnly, debouncedSearch],
+    [leagueId],
   );
 
   useEffect(() => {
     void load(false);
-  }, [load]);
+  }, [load, leagueId]);
+
+  const filteredFeed = useMemo(
+    () =>
+      applyClientFilters({
+        feed: data?.feed ?? [],
+        sourceFilter,
+        bucketFilter,
+        sortBy,
+        startersOnly,
+        unreadOnly,
+        search: debouncedSearch,
+      }),
+    [data?.feed, sourceFilter, bucketFilter, sortBy, startersOnly, unreadOnly, debouncedSearch],
+  );
 
   const grouped = useMemo(() => {
-    const feed = data?.feed ?? [];
     const buckets: NewsBucket[] = ["needs_action", "monitor", "fyi"];
     return buckets
       .map((bucket) => ({
         bucket,
-        items: feed.filter((item) => item.bucket === bucket),
+        items: filteredFeed.filter((item) => item.bucket === bucket),
       }))
       .filter((g) => g.items.length > 0);
-  }, [data?.feed]);
+  }, [filteredFeed]);
 
   const updateTriage = async (newsItemId: string, status: NewsTriageStatus) => {
     const res = await fetch(`/api/leagues/${leagueId}/news/triage`, {

@@ -3,9 +3,8 @@
 import { PrefetchRoutes } from "@/components/prefetch-routes";
 
 /**
- * From hub / leagues list: eagerly warm league overviews when ESPN is synced,
- * and lightly warm draft entry points. Full tab prefetch happens inside the
- * league segment layout once the user opens a league.
+ * From hub / leagues list: warm all candidate destinations to maximize
+ * click-through speed once the user starts navigating.
  */
 export function HubRoutePrefetch({
   syncedLeagueIds,
