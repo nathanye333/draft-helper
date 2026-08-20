@@ -52,6 +52,14 @@ function formatRelativeTime(iso: string | null): string {
   return `${days}d ago`;
 }
 
+interface RagChunk {
+  title: string;
+  snippet: string;
+  source: string;
+  publishedAt: string | null;
+  similarity: number;
+}
+
 function openSeasonAgent(leagueId: string, prompt: string) {
   window.dispatchEvent(
     new CustomEvent("season-agent-prompt", {
@@ -200,13 +208,7 @@ export function NewsTriageBoard({ leagueId }: { leagueId: string }) {
     const RAG_QUERY =
       "NFL fantasy football news: player injuries, trades, standout performances, busts, waiver wire targets";
 
-    let ragChunks: Array<{
-      title: string;
-      snippet: string;
-      source: string;
-      publishedAt: string | null;
-      similarity: number;
-    }> | null = null;
+    let ragChunks: RagChunk[] | null = null;
 
     try {
       const res = await fetch(`/api/leagues/${leagueId}/news/rag`, {
@@ -215,7 +217,7 @@ export function NewsTriageBoard({ leagueId }: { leagueId: string }) {
         body: JSON.stringify({ query: RAG_QUERY, matchCount: 12, matchThreshold: 0.25 }),
       });
       if (res.ok) {
-        const json = (await res.json()) as { chunks: typeof ragChunks };
+        const json = (await res.json()) as { chunks?: RagChunk[] };
         if (json.chunks && json.chunks.length > 0) ragChunks = json.chunks;
       }
     } catch {
