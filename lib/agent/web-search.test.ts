@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { normalizeSearchQuery, parseRssItems } from "@/lib/news/sources/rss";
+import { filterResultsToLastDays } from "@/lib/agent/web-search";
 
 describe("web-search helpers", () => {
   it("normalizes agent mega-queries", () => {
@@ -47,5 +48,20 @@ describe("web-search helpers", () => {
     const results = parseRssItems(xml, "bing-news", 1);
     expect(results).toHaveLength(1);
     expect(results[0].url).toBe("https://ok.example");
+  });
+
+  it("filters out results older than 30 days", () => {
+    const now = Date.now();
+    const recent = new Date(now - 7 * 24 * 60 * 60 * 1000).toISOString();
+    const stale = new Date(now - 45 * 24 * 60 * 60 * 1000).toISOString();
+    const filtered = filterResultsToLastDays(
+      [
+        { title: "recent", url: "https://a.example", snippet: "", publishedAt: recent },
+        { title: "stale", url: "https://b.example", snippet: "", publishedAt: stale },
+      ],
+      30,
+    );
+    expect(filtered).toHaveLength(1);
+    expect(filtered[0]?.title).toBe("recent");
   });
 });

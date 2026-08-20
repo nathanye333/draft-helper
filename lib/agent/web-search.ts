@@ -11,6 +11,7 @@ export interface WebSearchResult {
   url: string;
   snippet: string;
   source?: string;
+  publishedAt?: string | null;
 }
 
 export interface WebSearchResponse {
@@ -21,6 +22,24 @@ export interface WebSearchResponse {
 }
 
 export { normalizeSearchQuery, parseRssItems };
+const NEWS_LOOKBACK_DAYS = 30;
+
+function buildRecentNewsQuery(query: string): string {
+  if (/\bwhen:\d+[dwmy]\b/i.test(query)) return query;
+  return `${query} when:${NEWS_LOOKBACK_DAYS}d`;
+}
+
+export function filterResultsToLastDays(
+  results: WebSearchResult[],
+  lookbackDays: number,
+): WebSearchResult[] {
+  const minPublishedAt = Date.now() - lookbackDays * 24 * 60 * 60 * 1000;
+  return results.filter((result) => {
+    if (!result.publishedAt) return true;
+    const publishedAtMs = Date.parse(result.publishedAt);
+    return Number.isNaN(publishedAtMs) || publishedAtMs >= minPublishedAt;
+  });
+}
 
 async function searchDuckDuckGoInstant(
   query: string,
@@ -96,7 +115,11 @@ async function searchBrave(
 ): Promise<WebSearchResult[]> {
   const url =
     "https://api.search.brave.com/res/v1/web/search?" +
-    new URLSearchParams({ q: query, count: String(maxResults) }).toString();
+    new URLSearchParams({
+      q: query,
+      count: String(maxResults),
+      freshness: "pm",
+    }).toString();
   const raw = await fetchRssText(url, {
     headers: {
       Accept: "application/json",
@@ -136,12 +159,14 @@ export async function webSearch(
   const limit = Math.min(Math.max(options.maxResults ?? 5, 1), 8);
   const signal = options.signal;
   const braveKey = process.env.BRAVE_SEARCH_API_KEY?.trim();
+  const recentQuery = buildRecentNewsQuery(normalized);
 
   if (braveKey) {
     try {
       const results = await searchBrave(normalized, limit, braveKey, signal);
-      if (results.length > 0) {
-        return { query: normalized, results, provider: "brave" };
+      const recentResults = filterResultsToLastDays(results, NEWS_LOOKBACK_DAYS);
+      if (recentResults.length > 0) {
+        return { query: normalized, results: recentResults, provider: "brave" };
       }
     } catch (err) {
       console.warn("Brave search failed, falling back:", err);
@@ -156,14 +181,14 @@ export async function webSearch(
     {
       name: "google-news",
       run: async () => {
-        const rows = await searchGoogleNewsRss(normalized, limit, "google-news", signal);
+        const rows = await searchGoogleNewsRss(recentQuery, limit, "google-news", signal);
         return rows.map((r) => ({ ...r, source: r.source }));
       },
     },
     {
       name: "bing-news",
       run: async () => {
-        const rows = await searchBingNewsRss(normalized, limit, signal);
+        const rows = await searchBingNewsRss(recentQuery, limit, signal);
         return rows.map((r) => ({ ...r, source: r.source }));
       },
     },
@@ -176,8 +201,9 @@ export async function webSearch(
   for (const provider of providers) {
     try {
       const results = await provider.run();
-      if (results.length > 0) {
-        return { query: normalized, results, provider: provider.name };
+      const recentResults = filterResultsToLastDays(results, NEWS_LOOKBACK_DAYS);
+      if (recentResults.length > 0) {
+        return { query: normalized, results: recentResults, provider: provider.name };
       }
     } catch (err) {
       errors.push(`${provider.name}: ${err instanceof Error ? err.message : String(err)}`);
