@@ -16,6 +16,7 @@ import type {
 } from "@/lib/news/types";
 
 const MAX_CONCURRENT = 5;
+const NEWS_LOOKBACK_DAYS = 30;
 
 async function mapPool<T, R>(
   items: T[],
@@ -45,6 +46,19 @@ function buildEspnQuery(player: RosterPlayerForNews): string {
   return `site:espn.com "${player.name}" NFL`;
 }
 
+function buildRecentNewsQuery(query: string): string {
+  if (/\bwhen:\d+[dwmy]\b/i.test(query)) return query;
+  return `${query} when:${NEWS_LOOKBACK_DAYS}d`;
+}
+
+export function isRecentHit(hit: { publishedAt: string | null }): boolean {
+  if (!hit.publishedAt) return true;
+  const publishedAtMs = Date.parse(hit.publishedAt);
+  if (Number.isNaN(publishedAtMs)) return true;
+  const minPublishedAt = Date.now() - NEWS_LOOKBACK_DAYS * 24 * 60 * 60 * 1000;
+  return publishedAtMs >= minPublishedAt;
+}
+
 async function fetchPlayerNews(
   players: RosterPlayerForNews[],
   signal?: AbortSignal,
@@ -53,7 +67,7 @@ async function fetchPlayerNews(
   const targets = rosterPlayers.slice(0, 12);
 
   const generalQueries = await mapPool(targets, MAX_CONCURRENT, async (player) => {
-    const query = normalizeSearchQuery(buildPlayerQuery(player));
+    const query = buildRecentNewsQuery(normalizeSearchQuery(buildPlayerQuery(player)));
     try {
       const google = await searchGoogleNewsRss(query, 4, "google-news", signal);
       return google.map((r) => ({
@@ -69,7 +83,7 @@ async function fetchPlayerNews(
   });
 
   const espnQueries = await mapPool(targets.slice(0, 6), MAX_CONCURRENT, async (player) => {
-    const query = normalizeSearchQuery(buildEspnQuery(player));
+    const query = buildRecentNewsQuery(normalizeSearchQuery(buildEspnQuery(player)));
     try {
       const google = await searchGoogleNewsRss(query, 3, "espn", signal);
       return google.map((r) => ({
@@ -90,7 +104,7 @@ async function fetchPlayerNews(
       .slice(0, 5)
       .map((p) => `"${p.name}"`)
       .join(" OR ");
-    const query = normalizeSearchQuery(`${names} NFL injury`);
+    const query = buildRecentNewsQuery(normalizeSearchQuery(`${names} NFL injury`));
     try {
       const bing = await searchBingNewsRss(query, 8, signal);
       bingBatch = bing.map((r) => ({
@@ -107,7 +121,9 @@ async function fetchPlayerNews(
 
   const reddit = await fetchRedditFeeds({ maxPerSub: 12, signal, injuryFlairOnly: false });
 
-  return [...generalQueries.flat(), ...espnQueries.flat(), ...bingBatch, ...reddit];
+  return [...generalQueries.flat(), ...espnQueries.flat(), ...bingBatch, ...reddit].filter(
+    isRecentHit,
+  );
 }
 
 function applyFilters(feed: NewsItemView[], filter?: NewsFeedFilter): NewsItemView[] {
@@ -131,7 +147,8 @@ export async function aggregateLeagueNews(params: {
   if (!params.refresh) {
     const cached = getCachedNews(params.leagueId);
     if (cached) {
-      return { ...cached, feed: applyFilters(cached.feed, params.filter) };
+      const recentFeed = cached.feed.filter(isRecentHit);
+      return { ...cached, feed: applyFilters(recentFeed, params.filter) };
     }
   }
 

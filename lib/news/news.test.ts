@@ -3,6 +3,7 @@ import { normalizeTitle, urlHash } from "@/lib/news/dedupe";
 import { buildPlayerMatchIndex, matchPlayersInText } from "@/lib/news/player-match";
 import { isInjuryRelatedFlair, parseRedditFlair } from "@/lib/news/sources/reddit";
 import { classifySeverity, scoreNewsItem } from "@/lib/news/rank";
+import { isRecentHit } from "@/lib/news/aggregate";
 import type { RosterPlayerForNews } from "@/lib/news/types";
 
 const samplePlayers: RosterPlayerForNews[] = [
@@ -118,5 +119,14 @@ describe("dedupe helpers", () => {
   it("hashes urls consistently", () => {
     expect(urlHash("https://Example.com/A")).toBe(urlHash("https://example.com/a"));
     expect(normalizeTitle("Hello — World!")).toBe("hello world");
+  });
+});
+
+describe("news recency filter", () => {
+  it("drops items older than 30 days", () => {
+    const recent = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+    const old = new Date(Date.now() - 312 * 24 * 60 * 60 * 1000).toISOString();
+    expect(isRecentHit({ publishedAt: recent })).toBe(true);
+    expect(isRecentHit({ publishedAt: old })).toBe(false);
   });
 });
