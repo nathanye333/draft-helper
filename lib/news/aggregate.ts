@@ -6,7 +6,7 @@ import { buildInjuryBoard } from "@/lib/news/injury-board";
 import { getCachedNews, setCachedNews } from "@/lib/news/cache";
 import { persistNewsItems } from "@/lib/news/persist";
 import { loadRosterScope } from "@/lib/news/roster-scope";
-import { bucketForSeverity, classifySeverity, scoreNewsItem } from "@/lib/news/rank";
+import { bucketForSeverity, classifySeverity, isTopStoryHeadline, scoreNewsItem } from "@/lib/news/rank";
 import type {
   NewsFeedFilter,
   NewsItemView,
@@ -120,10 +120,42 @@ async function fetchPlayerNews(
   }
 
   const reddit = await fetchRedditFeeds({ maxPerSub: 12, signal, injuryFlairOnly: false });
+  const topStories = await fetchTopStories(signal);
 
-  return [...generalQueries.flat(), ...espnQueries.flat(), ...bingBatch, ...reddit].filter(
-    isRecentHit,
-  );
+  return [
+    ...generalQueries.flat(),
+    ...espnQueries.flat(),
+    ...bingBatch,
+    ...reddit,
+    ...topStories,
+  ].filter(isRecentHit);
+}
+
+async function fetchTopStories(signal?: AbortSignal): Promise<RawNewsHit[]> {
+  const queries = [
+    "NFL injury OR inactive OR IR OR questionable",
+    "NFL fantasy trade OR traded OR acquired",
+    "NFL fantasy career high OR monster game OR breakout OR standout OR sleeper",
+    "NFL fantasy bust OR dud OR disappointing OR struggled OR worst game",
+  ];
+
+  const batches = await mapPool(queries, 3, async (raw) => {
+    const query = buildRecentNewsQuery(normalizeSearchQuery(raw));
+    try {
+      const google = await searchGoogleNewsRss(query, 8, "google-news", signal);
+      return google.map((r) => ({
+        title: r.title,
+        url: r.url,
+        snippet: r.snippet,
+        source: r.source,
+        publishedAt: r.publishedAt,
+      }));
+    } catch {
+      return [] as RawNewsHit[];
+    }
+  });
+
+  return batches.flat().filter((hit) => isTopStoryHeadline(`${hit.title} ${hit.snippet}`));
 }
 
 function applyFilters(feed: NewsItemView[], filter?: NewsFeedFilter): NewsItemView[] {
@@ -202,7 +234,7 @@ export async function aggregateLeagueNews(params: {
   for (const hit of deduped) {
     const text = `${hit.title} ${hit.snippet}`;
     const matchedPlayers = matchPlayersInText(text, matchIndex);
-    if (matchedPlayers.length === 0) continue;
+    if (matchedPlayers.length === 0 && !isTopStoryHeadline(text)) continue;
 
     const corroborationCount = corroboration.get(normalizeTitle(hit.title)) ?? 1;
     const severity = classifySeverity(hit, matchedPlayers);

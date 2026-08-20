@@ -29,9 +29,67 @@ const INJURY_KEYWORDS = [
 
 const RUMOR_KEYWORDS = ["rumor", "expected", "likely", "could", "might", "per source", "sources say"];
 
+const TRADE_KEYWORDS = ["traded", "trade for", "acquired", "sent to", "deal for", "in a trade"];
+const PERFORMANCE_KEYWORDS = [
+  // Standout / boom games
+  "career high",
+  "career-high",
+  "season high",
+  "season-high",
+  "monster game",
+  "goes off",
+  "went off",
+  "explodes",
+  "breakout",
+  "lights out",
+  "huge game",
+  "best game",
+  "dominant",
+  "touchdowns",
+  "fantasy points",
+  "standout",
+  "stood out",
+  "steal of the draft",
+  "sleeper",
+  "league winner",
+  "must add",
+  "waiver wire",
+  // Busts / dud games
+  "bust",
+  "busted",
+  "dud",
+  "disappointing",
+  "disappoints",
+  "worst game",
+  "season low",
+  "season-low",
+  "career low",
+  "career-low",
+  "blanked",
+  "goose egg",
+  "zero points",
+  "put up a zero",
+  "struggle",
+  "struggles",
+  "struggled",
+  "bench him",
+  "drop him",
+  "sit him",
+];
+
 const OUT_KEYWORDS = ["ruled out", "will not play", "out for", " placed on ir", "inactive"];
 const DOUBTFUL_KEYWORDS = ["doubtful"];
 const QUESTIONABLE_KEYWORDS = ["questionable", "limited", "did not practice", "dnp"];
+
+export function isTopStoryHeadline(text: string): boolean {
+  const t = text.toLowerCase();
+  return (
+    INJURY_KEYWORDS.some((k) => t.includes(k)) ||
+    OUT_KEYWORDS.some((k) => t.includes(k)) ||
+    TRADE_KEYWORDS.some((k) => t.includes(k)) ||
+    PERFORMANCE_KEYWORDS.some((k) => t.includes(k))
+  );
+}
 
 export function classifySeverity(hit: RawNewsHit, matchedPlayers: MatchedPlayerRef[]): NewsSeverity {
   const text = `${hit.title} ${hit.snippet}`.toLowerCase();
@@ -86,6 +144,8 @@ export function scoreNewsItem(params: {
   }
 
   if (INJURY_KEYWORDS.some((k) => text.includes(k))) score += 2;
+  if (TRADE_KEYWORDS.some((k) => text.includes(k))) score += 1.5;
+  if (PERFORMANCE_KEYWORDS.some((k) => text.includes(k))) score += 1;
   if (hit.source === "espn") score += 1;
   if (hit.source === "reddit") score -= 0.5;
   if (corroborationCount > 1) score += (corroborationCount - 1) * 1.5;

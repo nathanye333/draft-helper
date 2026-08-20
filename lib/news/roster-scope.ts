@@ -80,10 +80,14 @@ export async function loadRosterScope(leagueId: string): Promise<RosterScopeResu
     }
   }
 
-  const { data: watchlist } = await supabase
-    .from("league_watchlist")
-    .select("espn_player_id")
-    .eq("league_id", leagueId);
+  const { data: userData } = await supabase.auth.getUser();
+  const { data: watchlist } = userData.user
+    ? await supabase
+        .from("league_watchlist")
+        .select("espn_player_id")
+        .eq("league_id", leagueId)
+        .eq("user_id", userData.user.id)
+    : { data: [] };
   for (const w of watchlist ?? []) {
     if (w.espn_player_id != null) espnIds.add(Number(w.espn_player_id));
   }

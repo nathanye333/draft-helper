@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { normalizeTitle, urlHash } from "@/lib/news/dedupe";
 import { buildPlayerMatchIndex, matchPlayersInText } from "@/lib/news/player-match";
 import { isInjuryRelatedFlair, parseRedditFlair } from "@/lib/news/sources/reddit";
-import { classifySeverity, scoreNewsItem } from "@/lib/news/rank";
+import { classifySeverity, isTopStoryHeadline, scoreNewsItem } from "@/lib/news/rank";
 import { isRecentHit } from "@/lib/news/aggregate";
 import type { RosterPlayerForNews } from "@/lib/news/types";
 
@@ -119,6 +119,17 @@ describe("dedupe helpers", () => {
   it("hashes urls consistently", () => {
     expect(urlHash("https://Example.com/A")).toBe(urlHash("https://example.com/a"));
     expect(normalizeTitle("Hello — World!")).toBe("hello world");
+  });
+});
+
+describe("top-story headlines", () => {
+  it("keeps injury, trade, boom, bust, and standout headlines", () => {
+    expect(isTopStoryHeadline("Star RB ruled out for Week 1")).toBe(true);
+    expect(isTopStoryHeadline("WR acquired in a trade")).toBe(true);
+    expect(isTopStoryHeadline("QB posts career-high fantasy points")).toBe(true);
+    expect(isTopStoryHeadline("RB is a fantasy bust after another dud")).toBe(true);
+    expect(isTopStoryHeadline("Standout sleeper WR looks like a league winner")).toBe(true);
+    expect(isTopStoryHeadline("Practice report schedule released")).toBe(false);
   });
 });
 

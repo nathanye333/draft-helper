@@ -32,7 +32,7 @@ export default async function NewsPage({
         <div>
           <h1 className="mb-1 text-2xl font-semibold">News triage</h1>
           <p className="text-sm text-slate-400">
-            Injury signals and player news for{" "}
+            Injury, trade, boom/bust, and standout headlines for{" "}
             {mine ? "your roster" : "this league"}, plus watchlist and matchup opponents.
           </p>
         </div>

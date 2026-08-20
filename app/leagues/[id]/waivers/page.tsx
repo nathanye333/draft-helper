@@ -1,6 +1,7 @@
 import { notFound, redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { fetchWaiverPool } from "@/lib/league/player-data";
+import { listWatchlistIds } from "@/lib/news/watchlist";
 import { LeagueNav } from "@/components/league/league-nav";
 import { SeasonAgentSection } from "@/components/league/season-agent-section";
 import { LeagueSyncButtons } from "@/components/league/league-sync-buttons";
@@ -20,6 +21,7 @@ export default async function WaiversPage({
   if (!league) notFound();
 
   const pool = await fetchWaiverPool(id);
+  const watchlistIds = await listWatchlistIds(id, userData.user.id);
 
   return (
     <div className="mx-auto max-w-6xl px-4 py-8 pb-28">
@@ -39,6 +41,7 @@ export default async function WaiversPage({
         currentWeek={pool.currentWeek}
         season={pool.season}
         players={pool.players}
+        watchlistIds={watchlistIds}
       />
 
       <SeasonAgentSection leagueId={id} />

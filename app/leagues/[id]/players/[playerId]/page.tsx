@@ -2,9 +2,11 @@ import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { fetchPlayerCard } from "@/lib/league/player-data";
+import { listWatchlistIds } from "@/lib/news/watchlist";
 import { LeagueNav } from "@/components/league/league-nav";
 import { TeamLink } from "@/components/league/entity-links";
 import { HealthStatus } from "@/components/league/roster-lineup-table";
+import { WatchlistButton } from "@/components/league/watchlist-button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
 export default async function PlayerCardPage({
@@ -28,6 +30,8 @@ export default async function PlayerCardPage({
 
   const card = await fetchPlayerCard(leagueId, espnPlayerId);
   if (!card) notFound();
+  const watchlistIds = await listWatchlistIds(leagueId, userData.user.id);
+  const onWatchlist = watchlistIds.includes(espnPlayerId);
 
   const { player, pool } = card;
   const headshot =
@@ -69,9 +73,17 @@ export default async function PlayerCardPage({
               </div>
               <div className="min-w-0 flex-1 space-y-3">
                 <div>
-                  <h1 className="text-2xl font-semibold tracking-tight text-slate-50">
-                    {player.name}
-                  </h1>
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <h1 className="text-2xl font-semibold tracking-tight text-slate-50">
+                      {player.name}
+                    </h1>
+                    <WatchlistButton
+                      leagueId={leagueId}
+                      espnPlayerId={espnPlayerId}
+                      playerName={player.name}
+                      initialWatched={onWatchlist}
+                    />
+                  </div>
                   <p className="text-sm text-slate-400">
                     {player.nfl_team ?? "Free agent"}
                     {player.position ? ` · ${player.position}` : ""}

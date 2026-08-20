@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
+import { WatchlistButton } from "@/components/league/watchlist-button";
 
 type WaiverRow = {
   espnPlayerId: number;
@@ -34,11 +35,13 @@ export function WaiversTable({
   players,
   currentWeek,
   season,
+  watchlistIds,
 }: {
   leagueId: string;
   players: WaiverRow[];
   currentWeek: number | null;
   season: number | null;
+  watchlistIds: number[];
 }) {
   const [sortKey, setSortKey] = useState<SortKey>("percentOwned");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
@@ -187,31 +190,39 @@ export function WaiversTable({
                   }
                 >
                   <td className="px-3 py-2">
-                    <Link
-                      href={`/leagues/${leagueId}/players/${p.espnPlayerId}`}
-                      className="flex items-center gap-2.5"
-                    >
-                      <span className="inline-flex h-9 w-9 shrink-0 overflow-hidden rounded-full border border-slate-700 bg-slate-800">
-                        {p.headshotUrl ? (
-                          // eslint-disable-next-line @next/next/no-img-element
-                          <img
-                            src={p.headshotUrl}
-                            alt=""
-                            className="h-full w-full object-cover object-top"
-                          />
-                        ) : null}
-                      </span>
-                      <span>
-                        <span className="font-medium text-sky-400 hover:underline">{p.name}</span>
-                        <span className="mt-0.5 block text-[11px] text-slate-500">
-                          {p.nflTeam ?? "FA"} {p.position}
-                          {p.injuryStatus &&
-                          !["ACTIVE", "NORMAL", "HEALTHY"].includes(p.injuryStatus.toUpperCase()) ? (
-                            <span className="ml-1 text-red-400">{p.injuryStatus}</span>
+                    <div className="flex items-center justify-between gap-2">
+                      <Link
+                        href={`/leagues/${leagueId}/players/${p.espnPlayerId}`}
+                        className="flex min-w-0 items-center gap-2.5"
+                      >
+                        <span className="inline-flex h-9 w-9 shrink-0 overflow-hidden rounded-full border border-slate-700 bg-slate-800">
+                          {p.headshotUrl ? (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img
+                              src={p.headshotUrl}
+                              alt=""
+                              className="h-full w-full object-cover object-top"
+                            />
                           ) : null}
                         </span>
-                      </span>
-                    </Link>
+                        <span>
+                          <span className="font-medium text-sky-400 hover:underline">{p.name}</span>
+                          <span className="mt-0.5 block text-[11px] text-slate-500">
+                            {p.nflTeam ?? "FA"} {p.position}
+                            {p.injuryStatus &&
+                            !["ACTIVE", "NORMAL", "HEALTHY"].includes(p.injuryStatus.toUpperCase()) ? (
+                              <span className="ml-1 text-red-400">{p.injuryStatus}</span>
+                            ) : null}
+                          </span>
+                        </span>
+                      </Link>
+                      <WatchlistButton
+                        leagueId={leagueId}
+                        espnPlayerId={p.espnPlayerId}
+                        playerName={p.name}
+                        initialWatched={watchlistIds.includes(p.espnPlayerId)}
+                      />
+                    </div>
                   </td>
                   <td className="border-l border-slate-900 px-2 py-2 text-xs text-slate-400">
                     {p.ownership === "WAIVERS" ? "WA" : "FA"}
