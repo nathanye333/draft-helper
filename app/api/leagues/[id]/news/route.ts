@@ -15,6 +15,8 @@ const querySchema = z.object({
   bucket: z.enum(["all", "needs_action", "monitor", "fyi"]).optional(),
   startersOnly: z.enum(["0", "1"]).optional(),
   unreadOnly: z.enum(["0", "1"]).optional(),
+  search: z.string().optional(),
+  sort: z.enum(["score", "recency"]).optional(),
 });
 
 export async function GET(
@@ -60,6 +62,8 @@ export async function GET(
       userId: userData.user.id,
       refresh,
       filter,
+      search: parsed.data.search,
+      sortBy: parsed.data.sort,
     });
     return NextResponse.json(data);
   } catch (err) {

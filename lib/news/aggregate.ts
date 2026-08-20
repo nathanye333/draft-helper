@@ -137,18 +137,54 @@ function applyFilters(feed: NewsItemView[], filter?: NewsFeedFilter): NewsItemVi
   });
 }
 
+function applySearch(feed: NewsItemView[], search?: string): NewsItemView[] {
+  const q = (search ?? "").trim().toLowerCase();
+  if (!q) return feed;
+  return feed.filter((item) => {
+    const haystack = `${item.title} ${item.snippet}`.toLowerCase();
+    return haystack.includes(q);
+  });
+}
+
+type SortBy = "score" | "recency";
+
+function sortFeed(feed: NewsItemView[], sortBy: SortBy): NewsItemView[] {
+  const items = [...feed];
+  if (sortBy === "score") {
+    return items.sort((a, b) => b.score - a.score);
+  }
+
+  const toMs = (iso: string | null) => {
+    if (!iso) return Number.NEGATIVE_INFINITY;
+    const ms = Date.parse(iso);
+    return Number.isNaN(ms) ? Number.NEGATIVE_INFINITY : ms;
+  };
+
+  return items.sort((a, b) => {
+    const diff = toMs(b.publishedAt) - toMs(a.publishedAt);
+    if (diff !== 0) return diff;
+    return b.score - a.score;
+  });
+}
+
 export async function aggregateLeagueNews(params: {
   leagueId: string;
   userId: string;
   refresh?: boolean;
   filter?: NewsFeedFilter;
+  search?: string;
+  sortBy?: SortBy;
   signal?: AbortSignal;
 }): Promise<NewsTriageResponse> {
+  const effectiveSortBy: SortBy = params.sortBy ?? "score";
+
   if (!params.refresh) {
     const cached = getCachedNews(params.leagueId);
     if (cached) {
       const recentFeed = cached.feed.filter(isRecentHit);
-      return { ...cached, feed: applyFilters(recentFeed, params.filter) };
+      const searched = applySearch(recentFeed, params.search);
+      const sorted = sortFeed(searched, effectiveSortBy);
+      return { ...cached, feed: applyFilters(sorted, params.filter) };
     }
   }
 
@@ -210,12 +246,15 @@ export async function aggregateLeagueNews(params: {
 
   const injuryBoard = buildInjuryBoard(scope.players, scope.injuryDeltas);
 
+  const searched = applySearch(enrichedFeed, params.search);
+  const sorted = sortFeed(searched, effectiveSortBy);
+
   const response: NewsTriageResponse = {
     fetchedAt: new Date().toISOString(),
     cached: false,
     lastSyncedAt: scope.lastSyncedAt,
     injuryBoard,
-    feed: applyFilters(enrichedFeed, params.filter),
+    feed: applyFilters(sorted, params.filter),
     providerNotes:
       scope.players.length === 0
         ? "Connect and sync your ESPN league to populate roster news."

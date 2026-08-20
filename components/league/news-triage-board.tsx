@@ -66,8 +66,16 @@ export function NewsTriageBoard({ leagueId }: { leagueId: string }) {
   const [error, setError] = useState<string | null>(null);
   const [sourceFilter, setSourceFilter] = useState<NewsSource | "all">("all");
   const [bucketFilter, setBucketFilter] = useState<NewsBucket | "all">("all");
+  const [sortBy, setSortBy] = useState<"score" | "recency">("score");
   const [startersOnly, setStartersOnly] = useState(false);
   const [unreadOnly, setUnreadOnly] = useState(false);
+  const [searchText, setSearchText] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+
+  useEffect(() => {
+    const t = window.setTimeout(() => setDebouncedSearch(searchText), 250);
+    return () => window.clearTimeout(t);
+  }, [searchText]);
 
   const load = useCallback(
     async (refresh = false) => {
@@ -78,8 +86,10 @@ export function NewsTriageBoard({ leagueId }: { leagueId: string }) {
         if (refresh) params.set("refresh", "1");
         if (sourceFilter !== "all") params.set("source", sourceFilter);
         if (bucketFilter !== "all") params.set("bucket", bucketFilter);
+        if (sortBy !== "score") params.set("sort", sortBy);
         if (startersOnly) params.set("startersOnly", "1");
         if (unreadOnly) params.set("unreadOnly", "1");
+        if (debouncedSearch.trim()) params.set("search", debouncedSearch.trim());
 
         const res = await fetch(`/api/leagues/${leagueId}/news?${params.toString()}`);
         if (!res.ok) {
@@ -94,7 +104,7 @@ export function NewsTriageBoard({ leagueId }: { leagueId: string }) {
         setLoading(false);
       }
     },
-    [leagueId, sourceFilter, bucketFilter, startersOnly, unreadOnly],
+    [leagueId, sourceFilter, bucketFilter, sortBy, startersOnly, unreadOnly, debouncedSearch],
   );
 
   useEffect(() => {
@@ -123,9 +133,12 @@ export function NewsTriageBoard({ leagueId }: { leagueId: string }) {
       prev
         ? {
             ...prev,
-            feed: prev.feed.map((item) =>
-              item.id === newsItemId ? { ...item, triageStatus: status } : item,
-            ),
+            feed:
+              status === "dismissed"
+                ? prev.feed.filter((item) => item.id !== newsItemId)
+                : prev.feed.map((item) =>
+                    item.id === newsItemId ? { ...item, triageStatus: status } : item,
+                  ),
           }
         : prev,
     );
@@ -160,6 +173,22 @@ export function NewsTriageBoard({ leagueId }: { leagueId: string }) {
             <option value="monitor">Monitor</option>
             <option value="fyi">FYI</option>
           </Select>
+        </div>
+        <div>
+          <label className="mb-1 block text-xs text-slate-500">Sort</label>
+          <Select value={sortBy} onChange={(e) => setSortBy(e.target.value as "score" | "recency")} className="w-40">
+            <option value="score">Relevance</option>
+            <option value="recency">Recency</option>
+          </Select>
+        </div>
+        <div>
+          <label className="mb-1 block text-xs text-slate-500">Search</label>
+          <input
+            value={searchText}
+            onChange={(e) => setSearchText(e.target.value)}
+            placeholder="title or snippet"
+            className="w-64 rounded-md border border-slate-800 bg-slate-950/50 px-2 py-1 text-sm text-slate-100 outline-none"
+          />
         </div>
         <label className="flex items-center gap-2 text-sm text-slate-300">
           <input
