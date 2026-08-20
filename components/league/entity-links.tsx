@@ -1,4 +1,7 @@
+"use client";
+
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
 
 export function PlayerLink({
@@ -12,10 +15,19 @@ export function PlayerLink({
   children: React.ReactNode;
   className?: string;
 }) {
+  const router = useRouter();
+  const href = `/leagues/${leagueId}/players/${espnPlayerId}`;
+
   return (
     <Link
-      href={`/leagues/${leagueId}/players/${espnPlayerId}`}
+      href={href}
       className={cn("text-emerald-300 hover:text-emerald-200 hover:underline", className)}
+      onMouseEnter={() => {
+        void router.prefetch(href);
+      }}
+      onFocus={() => {
+        void router.prefetch(href);
+      }}
     >
       {children}
     </Link>
@@ -33,10 +45,19 @@ export function TeamLink({
   children: React.ReactNode;
   className?: string;
 }) {
+  const router = useRouter();
+  const href = `/leagues/${leagueId}/teams/${espnTeamId}`;
+
   return (
     <Link
-      href={`/leagues/${leagueId}/teams/${espnTeamId}`}
+      href={href}
       className={cn("text-emerald-300 hover:text-emerald-200 hover:underline", className)}
+      onMouseEnter={() => {
+        void router.prefetch(href);
+      }}
+      onFocus={() => {
+        void router.prefetch(href);
+      }}
     >
       {children}
     </Link>

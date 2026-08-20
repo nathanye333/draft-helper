@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { DeleteDraftButton } from "@/components/draft-list/delete-draft-button";
 import { DeleteLeagueButton } from "@/components/league/delete-league-button";
+import { HubRoutePrefetch } from "@/components/hub-route-prefetch";
 import type { Draft, League } from "@/lib/supabase/types";
 
 const STATUS_VARIANT: Record<Draft["status"], "default" | "success" | "warning"> = {
@@ -33,8 +34,17 @@ export default async function DashboardPage() {
     supabase.from("leagues").select("*").order("updated_at", { ascending: false }),
   ]);
 
+  const typedLeagues = (leagues ?? []) as League[];
+  const typedDrafts = (drafts ?? []) as Draft[];
+  const syncedLeagueIds = typedLeagues
+    .filter((l) => l.last_synced_at)
+    .slice(0, 3)
+    .map((l) => l.id);
+  const draftHrefs = typedDrafts.slice(0, 5).map((d) => STATUS_HREF[d.status](d.id));
+
   return (
     <div className="mx-auto max-w-3xl px-4 py-10">
+      <HubRoutePrefetch syncedLeagueIds={syncedLeagueIds} draftHrefs={draftHrefs} />
       <div className="mb-10">
         <h1 className="text-2xl font-semibold">Fantasy helper</h1>
         <p className="mt-1 text-sm text-slate-400">
@@ -60,7 +70,7 @@ export default async function DashboardPage() {
             View all
           </Link>
         </div>
-        {!leagues || leagues.length === 0 ? (
+        {!typedLeagues.length ? (
           <Card>
             <CardContent className="py-8 text-center text-sm text-slate-400">
               No ESPN leagues yet. Connect with SWID / espn_s2 cookies.
@@ -68,7 +78,7 @@ export default async function DashboardPage() {
           </Card>
         ) : (
           <div className="flex flex-col gap-3">
-            {(leagues as League[]).slice(0, 5).map((league) => (
+            {typedLeagues.slice(0, 5).map((league) => (
               <Card key={league.id} className="transition-colors hover:border-slate-700">
                 <CardHeader className="flex-row items-center justify-between gap-3">
                   <Link href={`/leagues/${league.id}`} className="min-w-0 flex-1">
@@ -93,7 +103,7 @@ export default async function DashboardPage() {
             New draft
           </Link>
         </div>
-        {!drafts || drafts.length === 0 ? (
+        {!typedDrafts.length ? (
           <Card>
             <CardContent className="py-8 text-center text-sm text-slate-400">
               No drafts yet. Create one to configure your league and sync rankings.
@@ -101,7 +111,7 @@ export default async function DashboardPage() {
           </Card>
         ) : (
           <div className="flex flex-col gap-3">
-            {(drafts as Draft[]).map((draft) => (
+            {typedDrafts.map((draft) => (
               <Card key={draft.id} className="transition-colors hover:border-slate-700">
                 <CardHeader className="flex-row items-center justify-between gap-3">
                   <Link href={STATUS_HREF[draft.status](draft.id)} className="min-w-0 flex-1">

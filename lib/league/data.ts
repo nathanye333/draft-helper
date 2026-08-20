@@ -1,3 +1,4 @@
+import { cache } from "react";
 import { createClient } from "@/lib/supabase/server";
 import type {
   League,
@@ -19,7 +20,10 @@ export interface LeagueBundle {
   hasCredentials: boolean;
 }
 
-export async function fetchLeagueBundle(leagueId: string): Promise<LeagueBundle | null> {
+/** Deduped per request so layout + page (and parallel RSC) share one load. */
+export const fetchLeagueBundle = cache(async function fetchLeagueBundle(
+  leagueId: string,
+): Promise<LeagueBundle | null> {
   const supabase = await createClient();
 
   const { data: league, error } = await supabase
@@ -84,7 +88,7 @@ export async function fetchLeagueBundle(leagueId: string): Promise<LeagueBundle 
     projectionsByFpId,
     hasCredentials: Boolean(creds),
   };
-}
+});
 
 export function rosterSlotsFromLeague(league: League): { slot_type: SlotType; count: number }[] {
   const slots = league.settings?.rosterSlots;

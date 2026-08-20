@@ -1,3 +1,4 @@
+import { cache } from "react";
 import { createClient } from "@/lib/supabase/server";
 import {
   fetchRankingsBoard,
@@ -41,8 +42,9 @@ function normalizePick(row: PickWithDetails): PickWithDetails {
  *
  * Pass `includeProjStats` for agent tools that need the full FantasyPros
  * stats blob; UI pages omit it to keep payloads small.
+ * Deduped per request via React.cache.
  */
-export async function fetchDraftBundle(
+export const fetchDraftBundle = cache(async function fetchDraftBundle(
   draftId: string,
   options: { includeProjStats?: boolean } = {},
 ): Promise<DraftBundle | null> {
@@ -86,4 +88,4 @@ export async function fetchDraftBundle(
     rankings,
     picks,
   };
-}
+});
