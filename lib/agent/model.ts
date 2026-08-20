@@ -19,9 +19,7 @@ export function temperatureForModel(model: string): number {
 }
 
 /**
- * OpenAI reasoning models (gpt-5*, o-series, etc.). On /v1/chat/completions, function
- * tools are only supported when reasoning_effort is "none" — otherwise use /v1/responses.
- * Our draft agent always uses tools, so force "none" here.
+ * OpenAI reasoning models (gpt-5*, o-series, etc.).
  */
 export function isReasoningCapableModel(model: string): boolean {
   const m = model.trim().toLowerCase();
@@ -33,9 +31,21 @@ export function isReasoningCapableModel(model: string): boolean {
   return false;
 }
 
+/** gpt-5.6 family (sol / luna / terra) — tools require Responses API unless effort is none. */
+export function isGpt56Family(model: string): boolean {
+  return model.trim().toLowerCase().includes("gpt-5.6");
+}
+
+/**
+ * Only force reasoning_effort=none for legacy reasoning models that still use
+ * Chat Completions with tools. gpt-5.6* must NOT get this — it breaks other
+ * models and causes empty `content: []` payloads on tool-only turns for luna.
+ * gpt-5.6 goes through Responses API instead.
+ */
 export function reasoningForToolCallingModel(
   model: string,
 ): { effort: "none" } | undefined {
+  if (isGpt56Family(model)) return undefined;
   return isReasoningCapableModel(model) ? { effort: "none" } : undefined;
 }
 
@@ -68,6 +78,21 @@ export function createChatModel(config: LlmConfig): BaseChatModel {
 
   const baseURL = (config.baseUrl?.trim() || DEFAULT_OPENAI_BASE).replace(/\/$/, "");
   const reasoning = reasoningForToolCallingModel(model);
+
+  // gpt-5.6 + function tools must use /v1/responses. Chat Completions rejects
+  // tools with default reasoning, and forcing effort=none produces empty
+  // content arrays on tool-only assistant turns.
+  if (isGpt56Family(model)) {
+    return new ChatOpenAI({
+      model,
+      apiKey,
+      temperature,
+      streaming: true,
+      useResponsesApi: true,
+      configuration: { baseURL },
+    });
+  }
+
   return new ChatOpenAI({
     model,
     apiKey,

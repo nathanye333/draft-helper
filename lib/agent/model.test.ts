@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  isGpt56Family,
   isReasoningCapableModel,
   reasoningForToolCallingModel,
   temperatureForModel,
@@ -24,9 +25,15 @@ describe("temperatureForModel", () => {
 });
 
 describe("reasoningForToolCallingModel", () => {
-  it("forces reasoning effort none for tool-calling reasoning models", () => {
-    expect(reasoningForToolCallingModel("gpt-5.6-luna")).toEqual({ effort: "none" });
+  it("does not force effort none for gpt-5.6 (Responses API path)", () => {
+    expect(reasoningForToolCallingModel("gpt-5.6-luna")).toBeUndefined();
+    expect(reasoningForToolCallingModel("gpt-5.6-sol")).toBeUndefined();
+    expect(isGpt56Family("gpt-5.6-luna")).toBe(true);
+  });
+
+  it("forces reasoning effort none for legacy tool-calling reasoning models", () => {
     expect(reasoningForToolCallingModel("o4-mini")).toEqual({ effort: "none" });
+    expect(reasoningForToolCallingModel("gpt-5")).toEqual({ effort: "none" });
     expect(reasoningForToolCallingModel("gpt-4o-mini")).toBeUndefined();
     expect(isReasoningCapableModel("gpt-5.6-luna")).toBe(true);
     expect(isReasoningCapableModel("gpt-5-chat")).toBe(false);
