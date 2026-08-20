@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { normalizeSearchQuery, parseRssItems } from "@/lib/agent/web-search";
+import { normalizeSearchQuery, parseRssItems } from "@/lib/news/sources/rss";
 
 describe("web-search helpers", () => {
   it("normalizes agent mega-queries", () => {

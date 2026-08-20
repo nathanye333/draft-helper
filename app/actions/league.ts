@@ -77,6 +77,7 @@ export async function refreshLeague(leagueId: string) {
     revalidatePath(`/leagues/${leagueId}/start-sit`);
     revalidatePath(`/leagues/${leagueId}/trades`);
     revalidatePath(`/leagues/${leagueId}/waivers`);
+    revalidatePath(`/leagues/${leagueId}/news`);
   }
   return result;
 }
@@ -119,6 +120,7 @@ export async function refreshLeagueProjections(leagueId: string) {
   revalidatePath(`/leagues/${leagueId}/start-sit`);
   revalidatePath(`/leagues/${leagueId}/waivers`);
   revalidatePath(`/leagues/${leagueId}/trades`);
+  revalidatePath(`/leagues/${leagueId}/news`);
   if (result.ok) return result;
   return { ok: false as const, message: result.message };
 }
@@ -140,6 +142,7 @@ export async function refreshLeagueRankings(leagueId: string) {
   revalidatePath(`/leagues/${leagueId}/start-sit`);
   revalidatePath(`/leagues/${leagueId}/waivers`);
   revalidatePath(`/leagues/${leagueId}/trades`);
+  revalidatePath(`/leagues/${leagueId}/news`);
   if (result.ok) return result;
   return { ok: false as const, message: result.message };
 }
@@ -159,6 +162,7 @@ export async function refreshLeagueNflMatchups(leagueId: string) {
   revalidatePath(`/leagues/${leagueId}/start-sit`);
   revalidatePath(`/leagues/${leagueId}/waivers`);
   revalidatePath(`/leagues/${leagueId}/trades`);
+  revalidatePath(`/leagues/${leagueId}/news`);
   if (result.ok) return result;
   return { ok: false as const, message: result.message };
 }

@@ -215,3 +215,50 @@ export interface EspnPlayerWeekPoints {
   projected_points: number | null;
   synced_at: string;
 }
+
+export type NewsTriageStatus = "new" | "read" | "dismissed" | "actioned";
+
+export interface NewsItem {
+  id: string;
+  url_hash: string;
+  url: string;
+  title: string;
+  snippet: string | null;
+  source: string;
+  published_at: string | null;
+  fetched_at: string;
+}
+
+export interface NewsItemPlayer {
+  news_item_id: string;
+  espn_player_id: number;
+}
+
+export interface NewsTriageState {
+  id: string;
+  user_id: string;
+  league_id: string;
+  news_item_id: string;
+  status: NewsTriageStatus;
+  updated_at: string;
+}
+
+export interface LeagueInjuryDelta {
+  id: string;
+  league_id: string;
+  espn_player_id: number;
+  player_name: string;
+  from_status: string | null;
+  to_status: string;
+  detected_at: string;
+  acknowledged: boolean;
+}
+
+export interface LeagueWatchlistEntry {
+  id: string;
+  league_id: string;
+  user_id: string;
+  espn_player_id: number;
+  player_name: string;
+  created_at: string;
+}

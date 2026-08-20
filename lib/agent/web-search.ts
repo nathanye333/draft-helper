@@ -1,3 +1,11 @@
+import {
+  normalizeSearchQuery,
+  parseRssItems,
+  searchBingNewsRss,
+  searchGoogleNewsRss,
+  fetchRssText,
+} from "@/lib/news/sources/rss";
+
 export interface WebSearchResult {
   title: string;
   url: string;
@@ -12,114 +20,7 @@ export interface WebSearchResponse {
   note?: string;
 }
 
-const USER_AGENT =
-  "FantasyDraftHelper/0.1 (+https://github.com; draft-agent news lookup; not a scraper bot)";
-
-/** Collapse agent-built mega-queries into something search APIs accept cleanly. */
-export function normalizeSearchQuery(raw: string): string {
-  return raw
-    .replace(/[“”]/g, '"')
-    .replace(/['"]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 240);
-}
-
-function decodeXmlEntities(text: string): string {
-  return text
-    .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1")
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&nbsp;/g, " ")
-    .replace(/<[^>]+>/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function firstMatch(block: string, patterns: RegExp[]): string {
-  for (const pattern of patterns) {
-    const match = block.match(pattern);
-    if (match?.[1]) return match[1].trim();
-  }
-  return "";
-}
-
-/** Parse RSS/Atom-ish item blocks into search results. Exported for unit tests. */
-export function parseRssItems(xml: string, source: string, limit: number): WebSearchResult[] {
-  const items: WebSearchResult[] = [];
-  const itemRegex = /<item\b[\s\S]*?<\/item>/gi;
-  let match: RegExpExecArray | null;
-  while ((match = itemRegex.exec(xml)) !== null && items.length < limit) {
-    const block = match[0];
-    const title = decodeXmlEntities(
-      firstMatch(block, [/<title[^>]*>([\s\S]*?)<\/title>/i]),
-    );
-    const url = decodeXmlEntities(
-      firstMatch(block, [
-        /<link[^>]*href=["']([^"']+)["']/i,
-        /<link[^>]*>([\s\S]*?)<\/link>/i,
-        /<guid[^>]*>([\s\S]*?)<\/guid>/i,
-      ]),
-    );
-    const snippet = decodeXmlEntities(
-      firstMatch(block, [
-        /<description[^>]*>([\s\S]*?)<\/description>/i,
-        /<summary[^>]*>([\s\S]*?)<\/summary>/i,
-      ]),
-    );
-    if (!title || !url) continue;
-    items.push({ title, url, snippet: snippet.slice(0, 400), source });
-  }
-  return items;
-}
-
-async function fetchText(url: string, init?: RequestInit): Promise<string> {
-  const res = await fetch(url, {
-    ...init,
-    headers: {
-      Accept: "application/rss+xml, application/xml, application/json, text/xml, */*",
-      "User-Agent": USER_AGENT,
-      ...(init?.headers ?? {}),
-    },
-    signal: init?.signal ?? AbortSignal.timeout(12_000),
-  });
-  if (!res.ok) {
-    throw new Error(`HTTP ${res.status} from ${url}`);
-  }
-  return res.text();
-}
-
-async function searchGoogleNews(
-  query: string,
-  maxResults: number,
-  signal?: AbortSignal,
-): Promise<WebSearchResult[]> {
-  const url =
-    "https://news.google.com/rss/search?" +
-    new URLSearchParams({
-      q: query,
-      hl: "en-US",
-      gl: "US",
-      ceid: "US:en",
-    }).toString();
-  const xml = await fetchText(url, { signal });
-  return parseRssItems(xml, "google-news", maxResults);
-}
-
-async function searchBingNews(
-  query: string,
-  maxResults: number,
-  signal?: AbortSignal,
-): Promise<WebSearchResult[]> {
-  const url =
-    "https://www.bing.com/news/search?" +
-    new URLSearchParams({ q: query, format: "rss" }).toString();
-  const xml = await fetchText(url, { signal });
-  return parseRssItems(xml, "bing-news", maxResults);
-}
+export { normalizeSearchQuery, parseRssItems };
 
 async function searchDuckDuckGoInstant(
   query: string,
@@ -134,7 +35,7 @@ async function searchDuckDuckGoInstant(
       no_html: "1",
       skip_disambig: "1",
     }).toString();
-  const raw = await fetchText(url, {
+  const raw = await fetchRssText(url, {
     headers: { Accept: "application/json" },
     signal,
   });
@@ -196,7 +97,7 @@ async function searchBrave(
   const url =
     "https://api.search.brave.com/res/v1/web/search?" +
     new URLSearchParams({ q: query, count: String(maxResults) }).toString();
-  const raw = await fetchText(url, {
+  const raw = await fetchRssText(url, {
     headers: {
       Accept: "application/json",
       "X-Subscription-Token": apiKey,
@@ -252,8 +153,20 @@ export async function webSearch(
     name: string;
     run: () => Promise<WebSearchResult[]>;
   }> = [
-    { name: "google-news", run: () => searchGoogleNews(normalized, limit, signal) },
-    { name: "bing-news", run: () => searchBingNews(normalized, limit, signal) },
+    {
+      name: "google-news",
+      run: async () => {
+        const rows = await searchGoogleNewsRss(normalized, limit, "google-news", signal);
+        return rows.map((r) => ({ ...r, source: r.source }));
+      },
+    },
+    {
+      name: "bing-news",
+      run: async () => {
+        const rows = await searchBingNewsRss(normalized, limit, signal);
+        return rows.map((r) => ({ ...r, source: r.source }));
+      },
+    },
     {
       name: "duckduckgo-instant",
       run: () => searchDuckDuckGoInstant(normalized, limit, signal),

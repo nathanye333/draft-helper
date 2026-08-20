@@ -227,6 +227,11 @@ async function persistSnapshot(
     fp_player_id: fpMap.get(e.espnPlayerId) ?? null,
   }));
 
+  const { data: previousRoster } = await supabase
+    .from("league_roster_entries")
+    .select("espn_player_id, player_name, injury_status")
+    .eq("league_id", leagueId);
+
   // Replace roster snapshot for this league.
   await supabase.from("league_roster_entries").delete().eq("league_id", leagueId);
   if (rosterRows.length > 0) {
@@ -234,6 +239,15 @@ async function persistSnapshot(
     if (rosterError) {
       return { ok: false, reason: "api_error", message: rosterError.message };
     }
+  }
+
+  try {
+    const { recordInjuryDeltas } = await import("@/lib/news/injury-deltas");
+    const { invalidateNewsCache } = await import("@/lib/news/cache");
+    await recordInjuryDeltas(leagueId, previousRoster ?? [], rosterRows);
+    invalidateNewsCache(leagueId);
+  } catch (err) {
+    console.warn("Injury delta recording failed:", err);
   }
 
   await supabase.from("league_matchups").delete().eq("league_id", leagueId);

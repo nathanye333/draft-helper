@@ -192,14 +192,13 @@ npm run lint
 - Agent write tools (log/undo picks)
 - Production Ollama through Vercel (use local `next dev` for Ollama)
 - Chrome extension for ESPN cookie capture (paste SWID / espn_s2 instead)
-- Full news triage product (wrapper page ships under `/leagues/[id]/news`)
 
 ## Season Advisor (ESPN)
 
 Connect an ESPN league under **Leagues** / `/leagues/new` by pasting `leagueId`,
 `SWID`, and `espn_s2`. Rosters sync from ESPN’s unofficial fantasy API; weekly and
 ROS projections sync from FantasyPros into `player_projections_weekly`. Feature
-pages: Start/Sit, Trades, Waivers, plus a News wrapper. Season agent chat is
+pages: Start/Sit, Trades, Waivers, and News triage (injury board, ranked RSS feed, triage inbox). Season agent chat is
 available on league pages (BYOK / Ollama like the draft agent).
 
 Apply the season migration locally with `npx supabase db reset` (or `db push`).
