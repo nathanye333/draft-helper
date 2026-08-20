@@ -1,5 +1,6 @@
 import { createClient } from "@/lib/supabase/server";
 import { urlHash } from "@/lib/news/dedupe";
+import { embedText, embeddingText } from "@/lib/news/embeddings";
 import type { NewsItemView, NewsTriageStatus } from "@/lib/news/types";
 
 export async function persistNewsItems(
@@ -60,10 +61,27 @@ export async function persistNewsItems(
       });
     }
 
+    // Embed asynchronously — fire and forget; don't block the response
+    void embedAndStore(supabase, dbId, item.title, item.snippet ?? "");
+
     mapping.set(item.id, { dbId, triageStatus });
   }
 
   return mapping;
+}
+
+async function embedAndStore(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  newsItemId: string,
+  title: string,
+  snippet: string,
+) {
+  const embedding = await embedText(embeddingText(title, snippet));
+  if (!embedding) return;
+  await supabase.from("news_embeddings").upsert(
+    { news_item_id: newsItemId, embedding: JSON.stringify(embedding) },
+    { onConflict: "news_item_id" },
+  );
 }
 
 export async function loadTriageStatuses(

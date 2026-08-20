@@ -190,6 +190,112 @@ export function NewsTriageBoard({ leagueId }: { leagueId: string }) {
     );
   };
 
+  const openNewsSummary = async () => {
+    const feed = filteredFeed;
+    if (!feed.length) return;
+
+    // RAG retrieval: ask the server to embed a broad query and return the
+    // most semantically relevant news chunks from the stored embeddings.
+    // Falls back to the full filtered feed if embeddings aren't available yet.
+    const RAG_QUERY =
+      "NFL fantasy football news: player injuries, trades, standout performances, busts, waiver wire targets";
+
+    let ragChunks: Array<{
+      title: string;
+      snippet: string;
+      source: string;
+      publishedAt: string | null;
+      similarity: number;
+    }> | null = null;
+
+    try {
+      const res = await fetch(`/api/leagues/${leagueId}/news/rag`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query: RAG_QUERY, matchCount: 12, matchThreshold: 0.25 }),
+      });
+      if (res.ok) {
+        const json = (await res.json()) as { chunks: typeof ragChunks };
+        if (json.chunks && json.chunks.length > 0) ragChunks = json.chunks;
+      }
+    } catch {
+      // network error — fall back
+    }
+
+    if (ragChunks) {
+      // RAG path: feed retrieved, semantically ranked chunks to the LLM
+      openSeasonAgent(
+        leagueId,
+        [
+          "Summarize the following NFL fantasy news retrieved via semantic search (most relevant to your league).",
+          "Return in 3 sections: (1) Key story themes (up to 6) with one-liners, (2) Lineup/roster impact per theme (injuries, trades, boom-bust, performance), (3) Players/teams to watch next (start/sit, waiver adds, trade targets, monitor).",
+          "Use league tools if needed for roster/waiver context. Do not invent numbers.",
+          "",
+          "Retrieved news (ranked by relevance):",
+          JSON.stringify(
+            ragChunks.map((c) => ({
+              title: c.title,
+              snippet: c.snippet?.slice(0, 200),
+              source: c.source,
+              publishedAt: c.publishedAt,
+              similarity: Math.round(c.similarity * 100) / 100,
+            })),
+            null,
+            2,
+          ),
+        ].join("\n"),
+      );
+      return;
+    }
+
+    // Heuristic fallback (no embeddings yet — e.g. first run)
+    const KEYWORD_HINTS = [
+      "injury", "injured", "ruled out", "out for", "inactive", "doubtful",
+      "questionable", "limited", "did not practice", "dnp", "ir ", "injured reserve",
+      "traded", "trade for", "acquired", "sent to", "deal for", "in a trade",
+      "career high", "career-high", "monster game", "breakout", "touchdowns",
+      "fantasy points", "standout", "sleeper",
+      "bust", "busted", "dud", "disappointing", "worst game",
+      "season low", "career low", "goose egg", "zero points",
+    ];
+
+    const extractRelevantSnippet = (snippet: string) => {
+      const s = snippet ?? "";
+      if (!s.trim()) return s;
+      const lower = s.toLowerCase();
+      let bestIdx: number | null = null;
+      for (const hint of KEYWORD_HINTS) {
+        const idx = lower.indexOf(hint.toLowerCase());
+        if (idx === -1) continue;
+        if (bestIdx == null || idx < bestIdx) bestIdx = idx;
+      }
+      if (bestIdx == null) return s.slice(0, 120);
+      return s.slice(Math.max(0, bestIdx - 60), Math.min(s.length, bestIdx + 160));
+    };
+
+    const triaged = feed.map((item) => ({
+      title: item.title,
+      publishedAt: item.publishedAt,
+      source: item.source,
+      bucket: item.bucket,
+      matchedPlayers: item.matchedPlayers.map((p) => `${p.name} (${p.scope})`),
+      relevantSnippet: extractRelevantSnippet(item.snippet),
+    }));
+
+    openSeasonAgent(
+      leagueId,
+      [
+        "Summarize ALL of the news items currently shown in my triage feed.",
+        "For each story, only use the provided relevantSnippet (ignore the rest).",
+        "Return in 3 sections: (1) Top story themes (5-6) with one-liners, (2) Why each theme matters to my lineup, (3) Players/teams to watch next.",
+        "Use league tools if needed for roster/waiver context. Do not invent numbers.",
+        "",
+        "News items:",
+        JSON.stringify(triaged, null, 2),
+      ].join("\n"),
+    );
+  };
+
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-end gap-3">
@@ -254,6 +360,15 @@ export function NewsTriageBoard({ leagueId }: { leagueId: string }) {
         </label>
         <Button type="button" size="sm" disabled={loading} onClick={() => void load(true)}>
           {loading ? "Refreshing…" : "Refresh news"}
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          variant="secondary"
+          disabled={loading || (filteredFeed?.length ?? 0) === 0}
+          onClick={() => void openNewsSummary()}
+        >
+          LLM summary
         </Button>
         {data?.cached ? (
           <span className="text-xs text-slate-500">Cached feed (10 min)</span>
