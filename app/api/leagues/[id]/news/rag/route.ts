@@ -14,6 +14,7 @@ export interface RagChunk {
   urlHash: string;
   title: string;
   snippet: string;
+  body: string | null;
   source: string;
   publishedAt: string | null;
   similarity: number;
@@ -62,7 +63,8 @@ export async function POST(
       news_item_id: string;
       url_hash: string;
       title: string;
-      snippet: string;
+      snippet: string | null;
+      body: string | null;
       source: string;
       published_at: string | null;
       similarity: number;
@@ -70,7 +72,8 @@ export async function POST(
       newsItemId: r.news_item_id,
       urlHash: r.url_hash,
       title: r.title,
-      snippet: r.snippet,
+      snippet: r.snippet ?? "",
+      body: r.body ?? null,
       source: r.source,
       publishedAt: r.published_at,
       similarity: r.similarity,

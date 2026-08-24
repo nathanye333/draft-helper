@@ -86,7 +86,7 @@ export function parseRssItems(
     items.push({
       title,
       url,
-      snippet: snippet.slice(0, 400),
+      snippet: snippet.slice(0, 800),
       source,
       publishedAt: parseRssDate(pubDate),
     });
