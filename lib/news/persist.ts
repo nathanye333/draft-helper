@@ -1,5 +1,6 @@
 import { createClient } from "@/lib/supabase/server";
 import { urlHash } from "@/lib/news/dedupe";
+import { fetchArticleBody } from "@/lib/news/article-body";
 import { embedText, embeddingText } from "@/lib/news/embeddings";
 import type { NewsItemView, NewsTriageStatus } from "@/lib/news/types";
 
@@ -61,8 +62,9 @@ export async function persistNewsItems(
       });
     }
 
-    // Embed asynchronously — fire and forget; don't block the response
-    void embedAndStore(supabase, dbId, item.title, item.snippet ?? "");
+    // Enrich + embed asynchronously — don't block the news feed response.
+    // Title/caption alone are too thin for accurate RAG; fetch article body.
+    void enrichAndEmbed(supabase, dbId, item);
 
     mapping.set(item.id, { dbId, triageStatus });
   }
@@ -70,14 +72,50 @@ export async function persistNewsItems(
   return mapping;
 }
 
-async function embedAndStore(
+async function enrichAndEmbed(
   supabase: Awaited<ReturnType<typeof createClient>>,
   newsItemId: string,
-  title: string,
-  snippet: string,
+  item: NewsItemView,
 ) {
-  const embedding = await embedText(embeddingText(title, snippet));
+  let body: string | null = null;
+  {
+    const { data: existing, error } = await supabase
+      .from("news_items")
+      .select("body")
+      .eq("id", newsItemId)
+      .maybeSingle();
+    if (!error && typeof existing?.body === "string" && existing.body.trim().length > 0) {
+      body = existing.body;
+    }
+  }
+
+  if (!body) {
+    body = await fetchArticleBody(item.url);
+    if (body) {
+      const { error } = await supabase
+        .from("news_items")
+        .update({ body })
+        .eq("id", newsItemId);
+      if (error) {
+        console.warn("[enrichAndEmbed] body update failed:", error.message);
+      }
+    }
+  }
+
+  const embedding = await embedText(
+    embeddingText({
+      title: item.title,
+      snippet: item.snippet,
+      body,
+      source: item.source,
+      severity: item.severity,
+      bucket: item.bucket,
+      players: item.matchedPlayers.map((p) => `${p.name} (${p.scope})`),
+      flair: item.redditFlair ?? null,
+    }),
+  );
   if (!embedding) return;
+
   await supabase.from("news_embeddings").upsert(
     { news_item_id: newsItemId, embedding: JSON.stringify(embedding) },
     { onConflict: "news_item_id" },

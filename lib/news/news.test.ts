@@ -141,3 +141,41 @@ describe("news recency filter", () => {
     expect(isRecentHit({ publishedAt: old })).toBe(false);
   });
 });
+
+describe("RAG embedding text", () => {
+  it("includes players, severity, and body beyond title/caption", async () => {
+    const { embeddingText } = await import("@/lib/news/embeddings");
+    const text = embeddingText({
+      title: "Star RB ruled out",
+      snippet: "Coach says he will not play Sunday.",
+      body: "The star running back suffered a high-ankle sprain and is expected to miss at least two weeks. Fantasy managers should look to the handcuff.",
+      source: "espn",
+      severity: "out",
+      bucket: "needs_action",
+      players: ["Jonathan Taylor (roster)"],
+    });
+    expect(text).toContain("Star RB ruled out");
+    expect(text).toContain("Coach says he will not play Sunday.");
+    expect(text).toContain("Players: Jonathan Taylor (roster)");
+    expect(text).toContain("Severity: out");
+    expect(text).toContain("high-ankle sprain");
+  });
+});
+
+describe("article body extraction", () => {
+  it("prefers article region and strips tags", async () => {
+    const { extractArticleText, htmlToPlainText } = await import("@/lib/news/article-body");
+    expect(htmlToPlainText("<p>Hello <b>world</b></p>")).toContain("Hello world");
+    const text = extractArticleText(`
+      <html><head>
+        <meta name="description" content="Injury update for Week 3." />
+      </head><body>
+        <nav>Home Scores</nav>
+        <article><p>The quarterback is questionable with a shoulder injury and may be limited in practice.</p></article>
+      </body></html>
+    `);
+    expect(text).toContain("questionable with a shoulder injury");
+    expect(text).toContain("Injury update for Week 3");
+    expect(text).not.toContain("<p>");
+  });
+});
