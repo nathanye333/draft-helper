@@ -141,3 +141,30 @@ describe("news recency filter", () => {
     expect(isRecentHit({ publishedAt: old })).toBe(false);
   });
 });
+
+describe("reddit spike scoring", () => {
+  it("scores fresh high-engagement injury starter posts highly", async () => {
+    const { computeSpikeScore, isSpikeAlertWorthy } = await import("@/lib/news/reddit-spikes");
+    const spike = computeSpikeScore({
+      score: 120,
+      numComments: 40,
+      ageHours: 1,
+      injuryRelated: true,
+      matchedStarter: true,
+    });
+    expect(spike).toBeGreaterThan(80);
+    expect(isSpikeAlertWorthy(spike, 120, 40)).toBe(true);
+  });
+
+  it("rejects quiet old threads", async () => {
+    const { computeSpikeScore, isSpikeAlertWorthy } = await import("@/lib/news/reddit-spikes");
+    const spike = computeSpikeScore({
+      score: 8,
+      numComments: 2,
+      ageHours: 5,
+      injuryRelated: false,
+      matchedStarter: false,
+    });
+    expect(isSpikeAlertWorthy(spike, 8, 2)).toBe(false);
+  });
+});

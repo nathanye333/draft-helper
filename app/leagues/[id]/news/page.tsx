@@ -7,6 +7,7 @@ import { LeagueNav } from "@/components/league/league-nav";
 import { LeagueSyncButtons } from "@/components/league/league-sync-buttons";
 import { InjurySnapshot } from "@/components/league/injury-snapshot";
 import { NewsTriageBoard } from "@/components/league/news-triage-board";
+import { NewsEmailPrefs } from "@/components/league/news-email-prefs";
 import { SeasonAgentSection } from "@/components/league/season-agent-section";
 
 export default async function NewsPage({
@@ -41,6 +42,7 @@ export default async function NewsPage({
       <LeagueNav leagueId={id} current="news" />
 
       <div className="mt-6 space-y-6">
+        <NewsEmailPrefs leagueId={id} />
         <InjurySnapshot leagueId={id} players={injuryBoard} />
         <NewsTriageBoard leagueId={id} />
       </div>
