@@ -11,7 +11,7 @@ function authorizeCron(request: Request): boolean {
   return auth === `Bearer ${secret}`;
 }
 
-/** Hourly: send digests for leagues whose digest_hour_utc matches the current UTC hour. */
+/** Daily at configured UTC hour (Vercel Hobby): send digests for leagues whose digest_hour_utc matches. */
 export async function GET(request: Request) {
   if (!authorizeCron(request)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });

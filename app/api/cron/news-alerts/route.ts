@@ -11,7 +11,7 @@ function authorizeCron(request: Request): boolean {
   return auth === `Bearer ${secret}`;
 }
 
-/** Polls Reddit rising/hot for roster spikes and emails instant alerts. */
+/** Daily (Vercel Hobby): poll Reddit for roster spikes and email instant alerts. Pro can use a more frequent schedule in vercel.json. */
 export async function GET(request: Request) {
   if (!authorizeCron(request)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
