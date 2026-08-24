@@ -55,6 +55,7 @@ function formatRelativeTime(iso: string | null): string {
 interface RagChunk {
   title: string;
   snippet: string;
+  body: string | null;
   source: string;
   publishedAt: string | null;
   similarity: number;
@@ -225,19 +226,21 @@ export function NewsTriageBoard({ leagueId }: { leagueId: string }) {
     }
 
     if (ragChunks) {
-      // RAG path: feed retrieved, semantically ranked chunks to the LLM
+      // RAG path: feed retrieved, semantically ranked chunks to the LLM.
+      // Prefer article body over caption-only snippets for accurate summaries.
       openSeasonAgent(
         leagueId,
         [
           "Summarize the following NFL fantasy news retrieved via semantic search (most relevant to your league).",
           "Return in 3 sections: (1) Key story themes (up to 6) with one-liners, (2) Lineup/roster impact per theme (injuries, trades, boom-bust, performance), (3) Players/teams to watch next (start/sit, waiver adds, trade targets, monitor).",
-          "Use league tools if needed for roster/waiver context. Do not invent numbers.",
+          "Use the article body when present; fall back to snippet only if body is missing. Use league tools if needed for roster/waiver context. Do not invent numbers.",
           "",
           "Retrieved news (ranked by relevance):",
           JSON.stringify(
             ragChunks.map((c) => ({
               title: c.title,
-              snippet: c.snippet?.slice(0, 200),
+              snippet: c.snippet?.slice(0, 400) || undefined,
+              body: c.body?.slice(0, 1_500) || undefined,
               source: c.source,
               publishedAt: c.publishedAt,
               similarity: Math.round(c.similarity * 100) / 100,

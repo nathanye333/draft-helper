@@ -40,6 +40,47 @@ export async function embedText(text: string): Promise<number[] | null> {
   }
 }
 
-export function embeddingText(title: string, snippet: string): string {
-  return `${title}\n${snippet}`.trim();
+export interface EmbeddingDocument {
+  title: string;
+  snippet?: string | null;
+  body?: string | null;
+  source?: string | null;
+  severity?: string | null;
+  bucket?: string | null;
+  players?: string[];
+  flair?: string | null;
+}
+
+/**
+ * Build the text that gets embedded for RAG.
+ * Title + caption alone are too thin for accurate semantic search — include
+ * matched players, triage signals, and article body when available.
+ */
+export function embeddingText(doc: EmbeddingDocument): string {
+  const parts: string[] = [];
+  const title = doc.title?.trim();
+  if (title) parts.push(title);
+
+  const snippet = doc.snippet?.trim();
+  if (snippet) parts.push(snippet);
+
+  if (doc.players && doc.players.length > 0) {
+    parts.push(`Players: ${doc.players.join(", ")}`);
+  }
+  if (doc.severity) parts.push(`Severity: ${doc.severity}`);
+  if (doc.bucket) parts.push(`Priority: ${doc.bucket}`);
+  if (doc.source) parts.push(`Source: ${doc.source}`);
+  if (doc.flair) parts.push(`Flair: ${doc.flair}`);
+
+  const body = doc.body?.trim();
+  if (body) {
+    // Avoid repeating the caption if the body starts with it
+    const bodyForEmbed =
+      snippet && body.toLowerCase().startsWith(snippet.toLowerCase().slice(0, Math.min(snippet.length, 60)))
+        ? body.slice(snippet.length).trim()
+        : body;
+    if (bodyForEmbed) parts.push(bodyForEmbed);
+  }
+
+  return parts.join("\n").trim();
 }
