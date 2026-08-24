@@ -158,6 +158,53 @@ async function fetchTopStories(signal?: AbortSignal): Promise<RawNewsHit[]> {
   return batches.flat().filter((hit) => isTopStoryHeadline(`${hit.title} ${hit.snippet}`));
 }
 
+/** Build a scored news feed for a player scope without persisting (cron-safe). */
+export async function buildNewsFeedForPlayers(
+  players: RosterPlayerForNews[],
+  playersById: Map<number, RosterPlayerForNews>,
+  signal?: AbortSignal,
+): Promise<NewsItemView[]> {
+  const rawHits = await fetchPlayerNews(players, signal);
+  const deduped = dedupeRawHits(rawHits);
+  const corroboration = corroborationCounts(rawHits);
+  const matchIndex = buildPlayerMatchIndex(players);
+
+  const feed: NewsItemView[] = [];
+  for (const hit of deduped) {
+    const text = `${hit.title} ${hit.snippet}`;
+    const matchedPlayers = matchPlayersInText(text, matchIndex);
+    if (matchedPlayers.length === 0 && !isTopStoryHeadline(text)) continue;
+
+    const corroborationCount = corroboration.get(normalizeTitle(hit.title)) ?? 1;
+    const severity = classifySeverity(hit, matchedPlayers);
+    const bucket = bucketForSeverity(severity, matchedPlayers, playersById);
+    const score = scoreNewsItem({
+      hit,
+      matchedPlayers,
+      playersById,
+      corroborationCount,
+    });
+
+    feed.push({
+      id: urlHash(hit.url),
+      title: hit.title,
+      url: hit.url,
+      snippet: hit.snippet,
+      source: hit.source,
+      severity,
+      bucket,
+      score,
+      publishedAt: hit.publishedAt,
+      matchedPlayers,
+      corroborationCount,
+      triageStatus: "new",
+      redditFlair: hit.redditFlair ?? null,
+    });
+  }
+  feed.sort((a, b) => b.score - a.score);
+  return feed;
+}
+
 function applyFilters(feed: NewsItemView[], filter?: NewsFeedFilter): NewsItemView[] {
   if (!filter) return feed;
   return feed.filter((item) => {
@@ -225,44 +272,7 @@ export async function aggregateLeagueNews(params: {
     throw new Error("League not found");
   }
 
-  const rawHits = await fetchPlayerNews(scope.players, params.signal);
-  const deduped = dedupeRawHits(rawHits);
-  const corroboration = corroborationCounts(rawHits);
-  const matchIndex = buildPlayerMatchIndex(scope.players);
-
-  const feed: NewsItemView[] = [];
-  for (const hit of deduped) {
-    const text = `${hit.title} ${hit.snippet}`;
-    const matchedPlayers = matchPlayersInText(text, matchIndex);
-    if (matchedPlayers.length === 0 && !isTopStoryHeadline(text)) continue;
-
-    const corroborationCount = corroboration.get(normalizeTitle(hit.title)) ?? 1;
-    const severity = classifySeverity(hit, matchedPlayers);
-    const bucket = bucketForSeverity(severity, matchedPlayers, scope.playersById);
-    const score = scoreNewsItem({
-      hit,
-      matchedPlayers,
-      playersById: scope.playersById,
-      corroborationCount,
-    });
-
-    feed.push({
-      id: urlHash(hit.url),
-      title: hit.title,
-      url: hit.url,
-      snippet: hit.snippet,
-      source: hit.source,
-      severity,
-      bucket,
-      score,
-      publishedAt: hit.publishedAt,
-      matchedPlayers,
-      corroborationCount,
-      triageStatus: "new",
-      redditFlair: hit.redditFlair ?? null,
-    });
-  }
-  feed.sort((a, b) => b.score - a.score);
+  const feed = await buildNewsFeedForPlayers(scope.players, scope.playersById, params.signal);
 
   let enrichedFeed = feed;
   try {

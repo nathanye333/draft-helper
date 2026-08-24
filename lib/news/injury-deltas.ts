@@ -6,6 +6,13 @@ function normalizeStatus(status: string | null | undefined): string | null {
   return status.toUpperCase();
 }
 
+export interface RecordedInjuryDelta {
+  espnPlayerId: number;
+  playerName: string;
+  fromStatus: string | null;
+  toStatus: string;
+}
+
 export async function recordInjuryDeltas(
   leagueId: string,
   previous: Array<{
@@ -18,7 +25,7 @@ export async function recordInjuryDeltas(
     player_name: string;
     injury_status: string | null;
   }>,
-): Promise<void> {
+): Promise<RecordedInjuryDelta[]> {
   const supabase = await createClient();
   const prevById = new Map(previous.map((p) => [Number(p.espn_player_id), p]));
   const rows: Array<{
@@ -46,8 +53,14 @@ export async function recordInjuryDeltas(
     });
   }
 
-  if (rows.length === 0) return;
+  if (rows.length === 0) return [];
   await supabase.from("league_injury_deltas").insert(rows);
+  return rows.map((r) => ({
+    espnPlayerId: r.espn_player_id,
+    playerName: r.player_name,
+    fromStatus: r.from_status,
+    toStatus: r.to_status,
+  }));
 }
 
 export async function acknowledgeInjuryDelta(leagueId: string, espnPlayerId: number): Promise<void> {

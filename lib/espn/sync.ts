@@ -244,8 +244,14 @@ async function persistSnapshot(
   try {
     const { recordInjuryDeltas } = await import("@/lib/news/injury-deltas");
     const { invalidateNewsCache } = await import("@/lib/news/cache");
-    await recordInjuryDeltas(leagueId, previousRoster ?? [], rosterRows);
+    const deltas = await recordInjuryDeltas(leagueId, previousRoster ?? [], rosterRows);
     invalidateNewsCache(leagueId);
+    if (deltas.length > 0) {
+      const { maybeSendInjuryDeltaAlerts } = await import("@/lib/news/alerts");
+      await maybeSendInjuryDeltaAlerts({ leagueId, deltas }).catch((err) => {
+        console.warn("Injury alert email failed:", err);
+      });
+    }
   } catch (err) {
     console.warn("Injury delta recording failed:", err);
   }
