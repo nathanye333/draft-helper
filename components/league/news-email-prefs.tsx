@@ -84,8 +84,9 @@ export function NewsEmailPrefs({ leagueId }: { leagueId: string }) {
       </CardHeader>
       <CardContent className="space-y-3">
         <p className="text-sm text-slate-400">
-          Daily digest to your account email, plus near-instant alerts for Reddit spikes on your
-          players and urgent ESPN injury status jumps (OUT / IR / Doubtful).
+          Daily digest to your account email, plus alerts for Reddit spikes on your players and
+          urgent ESPN injury status jumps (OUT / IR / Doubtful). Injury alerts fire on ESPN sync;
+          Reddit spikes are checked on the daily cron (more frequent polling on Vercel Pro).
         </p>
         <label className="flex items-center gap-2 text-sm text-slate-200">
           <input
