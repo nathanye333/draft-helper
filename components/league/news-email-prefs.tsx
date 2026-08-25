@@ -16,8 +16,10 @@ const DIGEST_CRON_HOUR_UTC = 13;
 export function NewsEmailPrefs({ leagueId }: { leagueId: string }) {
   const [prefs, setPrefs] = useState<Prefs | null>(null);
   const [saving, setSaving] = useState(false);
+  const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  const [sendStatus, setSendStatus] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setError(null);
@@ -40,6 +42,7 @@ export function NewsEmailPrefs({ leagueId }: { leagueId: string }) {
     setSaving(true);
     setError(null);
     setSaved(false);
+    setSendStatus(null);
     try {
       const res = await fetch(`/api/leagues/${leagueId}/news/email-prefs`, {
         method: "PUT",
@@ -61,6 +64,31 @@ export function NewsEmailPrefs({ leagueId }: { leagueId: string }) {
       setError(err instanceof Error ? err.message : "Failed to save");
     } finally {
       setSaving(false);
+    }
+  };
+
+  const sendNow = async () => {
+    setSending(true);
+    setError(null);
+    setSaved(false);
+    setSendStatus(null);
+    try {
+      const res = await fetch(`/api/leagues/${leagueId}/news/send-digest`, {
+        method: "POST",
+      });
+      const json = (await res.json().catch(() => null)) as {
+        ok?: boolean;
+        sent?: boolean;
+        error?: string;
+      } | null;
+      if (!res.ok) {
+        throw new Error(json?.error ?? "Failed to send digest");
+      }
+      setSendStatus("Digest emailed to your account address.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to send digest");
+    } finally {
+      setSending(false);
     }
   };
 
@@ -106,11 +134,21 @@ export function NewsEmailPrefs({ leagueId }: { leagueId: string }) {
           />
           Instant alerts (Reddit spikes + injury jumps)
         </label>
-        <div className="flex items-center gap-3">
-          <Button type="button" size="sm" disabled={saving} onClick={() => void save()}>
+        <div className="flex flex-wrap items-center gap-3">
+          <Button type="button" size="sm" disabled={saving || sending} onClick={() => void save()}>
             {saving ? "Saving…" : "Save alerts"}
           </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant="secondary"
+            disabled={saving || sending}
+            onClick={() => void sendNow()}
+          >
+            {sending ? "Sending…" : "Send digest now"}
+          </Button>
           {saved ? <span className="text-xs text-emerald-400">Saved</span> : null}
+          {sendStatus ? <span className="text-xs text-emerald-400">{sendStatus}</span> : null}
           {error ? <span className="text-xs text-red-400">{error}</span> : null}
         </div>
       </CardContent>

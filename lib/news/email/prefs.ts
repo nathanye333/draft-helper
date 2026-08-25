@@ -42,22 +42,6 @@ export async function listInstantEnabledLeagues(): Promise<NewsEmailPrefs[]> {
   }));
 }
 
-export async function listDigestLeaguesForHour(hourUtc: number): Promise<NewsEmailPrefs[]> {
-  const supabase = createAdminClient();
-  const { data } = await supabase
-    .from("league_news_email_prefs")
-    .select("league_id, user_id, digest_enabled, instant_enabled, digest_hour_utc")
-    .eq("digest_enabled", true)
-    .eq("digest_hour_utc", hourUtc);
-  return (data ?? []).map((row) => ({
-    leagueId: String(row.league_id),
-    userId: String(row.user_id),
-    digestEnabled: Boolean(row.digest_enabled),
-    instantEnabled: Boolean(row.instant_enabled),
-    digestHourUtc: Number(row.digest_hour_utc),
-  }));
-}
-
 /** All leagues with daily digest enabled (Hobby cron fires once/day — do not filter by hour). */
 export async function listDigestEnabledLeagues(): Promise<NewsEmailPrefs[]> {
   const supabase = createAdminClient();
