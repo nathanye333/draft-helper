@@ -4,8 +4,9 @@ import { detectRedditSpikesForPlayers } from "@/lib/news/reddit-spikes";
 import {
   claimAlertSend,
   getLeagueEmailPrefs,
-  listDigestLeaguesForHour,
+  listDigestEnabledLeagues,
   listInstantEnabledLeagues,
+  releaseAlertSend,
   resolveUserEmail,
 } from "@/lib/news/email/prefs";
 import { sendEmail } from "@/lib/news/email/resend";
@@ -86,6 +87,7 @@ export async function sendRedditSpikeAlertsForLeague(
     }
     const result = await sendEmail({ to: email, subject, text, html });
     if (!result.ok) {
+      await releaseAlertSend({ leagueId, kind: "reddit_spike", fingerprint });
       console.warn("[reddit spike email]", result.error);
       return { sent, skipped, error: result.error };
     }
@@ -176,74 +178,117 @@ export async function maybeSendInjuryDeltaAlerts(params: {
     if (!claimed) continue;
     const result = await sendEmail({ to: email, subject, text, html });
     if (result.ok) sent += 1;
-    else console.warn("[injury email]", result.error);
+    else {
+      await releaseAlertSend({
+        leagueId: params.leagueId,
+        kind: "injury_delta",
+        fingerprint,
+      });
+      console.warn("[injury email]", result.error);
+    }
   }
 
   return { sent };
 }
 
+/**
+ * Send a news digest email for one league.
+ * Cron uses daily fingerprint dedupe; manual sends use force to bypass it.
+ */
+export async function sendDigestForLeague(params: {
+  leagueId: string;
+  userId: string;
+  now?: Date;
+  force?: boolean;
+}): Promise<{ sent: true } | { sent: false; skipped: true } | { sent: false; error: string }> {
+  const now = params.now ?? new Date();
+  const day = now.toISOString().slice(0, 10);
+  const fingerprint = params.force
+    ? `digest:manual:${day}:${now.getTime()}`
+    : `digest:${day}`;
+
+  const email = await resolveUserEmail(params.userId);
+  if (!email) return { sent: false, error: "no email" };
+
+  const name = await leagueName(params.leagueId);
+  const scope = await loadRosterScopeAdmin(params.leagueId, params.userId);
+  const feed = scope
+    ? await buildNewsFeedForPlayers(scope.players, scope.playersById)
+    : [];
+
+  const items = feed
+    .filter((i) => i.bucket === "needs_action" || i.bucket === "monitor" || i.score >= 4)
+    .slice(0, 15);
+
+  const injuryBoard = scope ? buildInjuryBoard(scope.players, scope.injuryDeltas) : [];
+  const injuryLines = injuryBoard
+    .filter((p) => p.delta)
+    .slice(0, 10)
+    .map(
+      (p) =>
+        `${p.name}: ${p.delta!.fromStatus ?? "—"} → ${p.delta!.toStatus}${
+          isStarterSlot(p.lineupSlot) ? " (starter)" : ""
+        }`,
+    );
+
+  const { subject, text, html } = formatDigestEmail({
+    leagueName: name,
+    appUrl: appBaseUrl(),
+    leagueId: params.leagueId,
+    items,
+    injuryLines,
+  });
+
+  const claimed = await claimAlertSend({
+    leagueId: params.leagueId,
+    userId: params.userId,
+    kind: "digest",
+    fingerprint,
+    subject,
+  });
+  if (!claimed) return { sent: false, skipped: true };
+
+  const result = await sendEmail({ to: email, subject, text, html });
+  if (result.ok) return { sent: true };
+
+  await releaseAlertSend({
+    leagueId: params.leagueId,
+    kind: "digest",
+    fingerprint,
+  });
+  return { sent: false, error: result.error };
+}
+
+/**
+ * Send daily digests for every league with digest enabled.
+ * Vercel Hobby only allows one daily cron tick — filtering by digest_hour_utc
+ * would silently skip anyone who picked a different hour in the UI.
+ */
 export async function runDailyDigestsForCurrentHour(now = new Date()): Promise<{
   hourUtc: number;
   leagues: number;
   sent: number;
+  skipped: number;
   errors: string[];
 }> {
   const hourUtc = now.getUTCHours();
-  const leagues = await listDigestLeaguesForHour(hourUtc);
+  const leagues = await listDigestEnabledLeagues();
   let sent = 0;
+  let skipped = 0;
   const errors: string[] = [];
-  const day = now.toISOString().slice(0, 10);
 
   for (const prefs of leagues) {
     try {
-      const fingerprint = `digest:${day}`;
-      const email = await resolveUserEmail(prefs.userId);
-      if (!email) {
-        errors.push(`${prefs.leagueId}: no email`);
-        continue;
-      }
-
-      const name = await leagueName(prefs.leagueId);
-      const scope = await loadRosterScopeAdmin(prefs.leagueId, prefs.userId);
-      const feed = scope
-        ? await buildNewsFeedForPlayers(scope.players, scope.playersById)
-        : [];
-
-      const items = feed
-        .filter((i) => i.bucket === "needs_action" || i.bucket === "monitor" || i.score >= 4)
-        .slice(0, 15);
-
-      const injuryBoard = scope ? buildInjuryBoard(scope.players, scope.injuryDeltas) : [];
-      const injuryLines = injuryBoard
-        .filter((p) => p.delta)
-        .slice(0, 10)
-        .map(
-          (p) =>
-            `${p.name}: ${p.delta!.fromStatus ?? "—"} → ${p.delta!.toStatus}${
-              isStarterSlot(p.lineupSlot) ? " (starter)" : ""
-            }`,
-        );
-
-      const { subject, text, html } = formatDigestEmail({
-        leagueName: name,
-        appUrl: appBaseUrl(),
-        leagueId: prefs.leagueId,
-        items,
-        injuryLines,
-      });
-
-      const claimed = await claimAlertSend({
+      const result = await sendDigestForLeague({
         leagueId: prefs.leagueId,
         userId: prefs.userId,
-        kind: "digest",
-        fingerprint,
-        subject,
+        now,
       });
-      if (!claimed) continue;
-
-      const result = await sendEmail({ to: email, subject, text, html });
-      if (result.ok) sent += 1;
-      else errors.push(`${prefs.leagueId}: ${result.error}`);
+      if (result.sent) sent += 1;
+      else if ("skipped" in result && result.skipped) skipped += 1;
+      else if ("error" in result && result.error) {
+        errors.push(`${prefs.leagueId}: ${result.error}`);
+      }
     } catch (err) {
       errors.push(
         `${prefs.leagueId}: ${err instanceof Error ? err.message : "digest failed"}`,
@@ -251,5 +296,5 @@ export async function runDailyDigestsForCurrentHour(now = new Date()): Promise<{
     }
   }
 
-  return { hourUtc, leagues: leagues.length, sent, errors };
+  return { hourUtc, leagues: leagues.length, sent, skipped, errors };
 }
