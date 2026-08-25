@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Select } from "@/components/ui/select";
 
 interface Prefs {
   digestEnabled: boolean;
@@ -11,14 +10,8 @@ interface Prefs {
   digestHourUtc: number;
 }
 
-const HOUR_OPTIONS = Array.from({ length: 24 }, (_, h) => h);
-
-function formatHourLabel(hourUtc: number): string {
-  const et = (hourUtc - 4 + 24) % 24; // rough EDT offset for label only
-  const ampm = et >= 12 ? "PM" : "AM";
-  const h12 = et % 12 === 0 ? 12 : et % 12;
-  return `${hourUtc}:00 UTC (~${h12} ${ampm} ET)`;
-}
+/** Matches vercel.json news-digest cron (Hobby: once daily). */
+const DIGEST_CRON_HOUR_UTC = 13;
 
 export function NewsEmailPrefs({ leagueId }: { leagueId: string }) {
   const [prefs, setPrefs] = useState<Prefs | null>(null);
@@ -51,7 +44,11 @@ export function NewsEmailPrefs({ leagueId }: { leagueId: string }) {
       const res = await fetch(`/api/leagues/${leagueId}/news/email-prefs`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(prefs),
+        body: JSON.stringify({
+          ...prefs,
+          // Persist the cron hour so prefs stay aligned with the daily schedule.
+          digestHourUtc: DIGEST_CRON_HOUR_UTC,
+        }),
       });
       if (!res.ok) {
         const json = (await res.json().catch(() => null)) as { error?: string } | null;
@@ -84,9 +81,10 @@ export function NewsEmailPrefs({ leagueId }: { leagueId: string }) {
       </CardHeader>
       <CardContent className="space-y-3">
         <p className="text-sm text-slate-400">
-          Daily digest to your account email, plus alerts for Reddit spikes on your players and
-          urgent ESPN injury status jumps (OUT / IR / Doubtful). Injury alerts fire on ESPN sync;
-          Reddit spikes are checked on the daily cron (more frequent polling on Vercel Pro).
+          Daily digest to your account email around 13:00 UTC (~9 AM ET), plus alerts for Reddit
+          spikes on your players and urgent ESPN injury status jumps (OUT / IR / Doubtful). Injury
+          alerts fire on ESPN sync; Reddit spikes are checked on the daily cron (more frequent
+          polling on Vercel Pro).
         </p>
         <label className="flex items-center gap-2 text-sm text-slate-200">
           <input
@@ -108,25 +106,6 @@ export function NewsEmailPrefs({ leagueId }: { leagueId: string }) {
           />
           Instant alerts (Reddit spikes + injury jumps)
         </label>
-        <div>
-          <label className="mb-1 block text-xs text-slate-500">Digest send hour</label>
-          <Select
-            value={String(prefs.digestHourUtc)}
-            onChange={(e) =>
-              setPrefs((p) =>
-                p ? { ...p, digestHourUtc: Number(e.target.value) } : p,
-              )
-            }
-            className="w-64"
-            disabled={!prefs.digestEnabled}
-          >
-            {HOUR_OPTIONS.map((h) => (
-              <option key={h} value={h}>
-                {formatHourLabel(h)}
-              </option>
-            ))}
-          </Select>
-        </div>
         <div className="flex items-center gap-3">
           <Button type="button" size="sm" disabled={saving} onClick={() => void save()}>
             {saving ? "Saving…" : "Save alerts"}

@@ -206,3 +206,32 @@ describe("article body extraction", () => {
     expect(text).not.toContain("<p>");
   });
 });
+
+describe("digest email template", () => {
+  it("renders top stories and injury lines", async () => {
+    const { formatDigestEmail } = await import("@/lib/news/email/templates");
+    const { subject, text, html } = formatDigestEmail({
+      leagueName: "Test League",
+      appUrl: "https://example.com",
+      leagueId: "league-1",
+      items: [
+        {
+          title: "Starter ruled out",
+          url: "https://news.example/out",
+          bucket: "needs_action",
+          severity: "out",
+          source: "espn",
+          matchedPlayers: [{ espnPlayerId: 1, name: "Patrick Mahomes", scope: "roster" }],
+          score: 10,
+        },
+      ],
+      injuryLines: ["Patrick Mahomes: Q → OUT (starter)"],
+    });
+    expect(subject).toContain("Test League");
+    expect(text).toContain("Daily news digest");
+    expect(text).toContain("Starter ruled out");
+    expect(text).toContain("Patrick Mahomes: Q → OUT (starter)");
+    expect(html).toContain("Open news triage");
+    expect(html).toContain("https://example.com/leagues/league-1/news");
+  });
+});

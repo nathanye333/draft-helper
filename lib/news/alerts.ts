@@ -4,8 +4,9 @@ import { detectRedditSpikesForPlayers } from "@/lib/news/reddit-spikes";
 import {
   claimAlertSend,
   getLeagueEmailPrefs,
-  listDigestLeaguesForHour,
+  listDigestEnabledLeagues,
   listInstantEnabledLeagues,
+  releaseAlertSend,
   resolveUserEmail,
 } from "@/lib/news/email/prefs";
 import { sendEmail } from "@/lib/news/email/resend";
@@ -86,6 +87,7 @@ export async function sendRedditSpikeAlertsForLeague(
     }
     const result = await sendEmail({ to: email, subject, text, html });
     if (!result.ok) {
+      await releaseAlertSend({ leagueId, kind: "reddit_spike", fingerprint });
       console.warn("[reddit spike email]", result.error);
       return { sent, skipped, error: result.error };
     }
@@ -176,21 +178,35 @@ export async function maybeSendInjuryDeltaAlerts(params: {
     if (!claimed) continue;
     const result = await sendEmail({ to: email, subject, text, html });
     if (result.ok) sent += 1;
-    else console.warn("[injury email]", result.error);
+    else {
+      await releaseAlertSend({
+        leagueId: params.leagueId,
+        kind: "injury_delta",
+        fingerprint,
+      });
+      console.warn("[injury email]", result.error);
+    }
   }
 
   return { sent };
 }
 
+/**
+ * Send daily digests for every league with digest enabled.
+ * Vercel Hobby only allows one daily cron tick — filtering by digest_hour_utc
+ * would silently skip anyone who picked a different hour in the UI.
+ */
 export async function runDailyDigestsForCurrentHour(now = new Date()): Promise<{
   hourUtc: number;
   leagues: number;
   sent: number;
+  skipped: number;
   errors: string[];
 }> {
   const hourUtc = now.getUTCHours();
-  const leagues = await listDigestLeaguesForHour(hourUtc);
+  const leagues = await listDigestEnabledLeagues();
   let sent = 0;
+  let skipped = 0;
   const errors: string[] = [];
   const day = now.toISOString().slice(0, 10);
 
@@ -239,11 +255,21 @@ export async function runDailyDigestsForCurrentHour(now = new Date()): Promise<{
         fingerprint,
         subject,
       });
-      if (!claimed) continue;
+      if (!claimed) {
+        skipped += 1;
+        continue;
+      }
 
       const result = await sendEmail({ to: email, subject, text, html });
       if (result.ok) sent += 1;
-      else errors.push(`${prefs.leagueId}: ${result.error}`);
+      else {
+        await releaseAlertSend({
+          leagueId: prefs.leagueId,
+          kind: "digest",
+          fingerprint,
+        });
+        errors.push(`${prefs.leagueId}: ${result.error}`);
+      }
     } catch (err) {
       errors.push(
         `${prefs.leagueId}: ${err instanceof Error ? err.message : "digest failed"}`,
@@ -251,5 +277,5 @@ export async function runDailyDigestsForCurrentHour(now = new Date()): Promise<{
     }
   }
 
-  return { hourUtc, leagues: leagues.length, sent, errors };
+  return { hourUtc, leagues: leagues.length, sent, skipped, errors };
 }
