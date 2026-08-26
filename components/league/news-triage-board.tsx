@@ -56,6 +56,7 @@ function formatRelativeTime(iso: string | null): string {
 interface RagChunk {
   title: string;
   snippet: string;
+  content?: string | null;
   body: string | null;
   source: string;
   publishedAt: string | null;
@@ -239,10 +240,13 @@ export function NewsTriageBoard({ leagueId }: { leagueId: string }) {
           "Retrieved news (ranked by relevance):",
           JSON.stringify(
             ragChunks.map((c) => {
-              const excerpt = pickRelevantChunks(c.body || c.snippet, {
-                maxChunks: 2,
-                maxChars: 500,
-              });
+              const passage = c.content?.trim() || "";
+              const excerpt =
+                passage ||
+                pickRelevantChunks(c.body || c.snippet, {
+                  maxChunks: 2,
+                  maxChars: 500,
+                });
               return {
                 title: c.title,
                 excerpt: excerpt || c.snippet?.slice(0, 400) || undefined,

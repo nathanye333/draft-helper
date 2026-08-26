@@ -290,3 +290,27 @@ describe("relevant body chunks", () => {
     expect(excerpt).not.toContain("practice-squad tight end");
   });
 });
+
+describe("semantic body chunk builder", () => {
+  it("prefixes passages with title and players for embedding", async () => {
+    const { buildBodyChunksForEmbed, cosineSimilarity } = await import(
+      "@/lib/news/body-chunks"
+    );
+    const chunks = buildBodyChunksForEmbed({
+      title: "Mahomes injury update",
+      body: [
+        "Kansas City opened practice with walkthroughs and special teams periods that ran long.",
+        "Patrick Mahomes was ruled out with a high-ankle sprain and will miss Sunday's game.",
+        "The Chiefs also elevated a practice-squad receiver for depth this week.",
+      ].join("\n\n"),
+      playerNames: ["Patrick Mahomes"],
+    });
+    expect(chunks.length).toBeGreaterThanOrEqual(2);
+    expect(chunks[0]?.embedInput).toContain("Title: Mahomes injury update");
+    expect(chunks[0]?.embedInput).toContain("Players: Patrick Mahomes");
+    expect(chunks.some((c) => /ruled out|sprain/i.test(c.content))).toBe(true);
+
+    expect(cosineSimilarity([1, 0], [1, 0])).toBeCloseTo(1);
+    expect(cosineSimilarity([1, 0], [0, 1])).toBeCloseTo(0);
+  });
+});

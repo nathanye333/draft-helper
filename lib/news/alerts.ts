@@ -20,7 +20,11 @@ import { buildInjuryBoard } from "@/lib/news/injury-board";
 import { isStarterSlot } from "@/lib/league/slot-order";
 import { urlHash } from "@/lib/news/dedupe";
 import { fetchArticleBody, sanitizeArticleText } from "@/lib/news/article-body";
-import { pickRelevantChunks } from "@/lib/news/relevant-chunks";
+import {
+  indexBodyChunks,
+  keywordExcerptFallback,
+  semanticExcerptsByUrlHash,
+} from "@/lib/news/body-chunks";
 import type { NewsItemView } from "@/lib/news/types";
 
 const URGENT_INJURY = new Set(["OUT", "IR", "DOUBTFUL", "INJURY_RESERVE"]);
@@ -95,28 +99,43 @@ async function resolveBodiesForDigest(
     const fetched = sanitizeArticleText(await fetchArticleBody(item.url));
     if (!fetched) continue;
     bodies.set(hash, fetched);
-    const { error } = await supabase
+    const { data: updated } = await supabase
       .from("news_items")
       .update({ body: fetched })
-      .eq("url_hash", hash);
-    if (error) console.warn("[digest body update]", error.message);
+      .eq("url_hash", hash)
+      .select("id")
+      .maybeSingle();
+    if (updated?.id) {
+      void indexBodyChunks(supabase, {
+        newsItemId: String(updated.id),
+        title: item.title,
+        body: fetched,
+        playerNames: item.matchedPlayers.map((p) => p.name),
+      });
+    }
   }
 
   return bodies;
 }
 
-function withExcerpts(
+async function withExcerpts(
   items: NewsItemView[],
   bodies: Map<string, string>,
-): Array<NewsItemView & { excerpt: string }> {
+): Promise<Array<NewsItemView & { excerpt: string }>> {
+  const semantic = await semanticExcerptsByUrlHash(items, {
+    maxChunksPerItem: 2,
+    maxChars: 360,
+  });
+
   return items.map((item) => {
     const hash = urlHash(item.url);
-    const sourceText = bodies.get(hash) || item.snippet || "";
-    const excerpt = pickRelevantChunks(sourceText, {
-      playerNames: item.matchedPlayers.map((p) => p.name),
-      maxChunks: 2,
-      maxChars: 360,
-    });
+    const excerpt =
+      semantic.get(hash) ||
+      keywordExcerptFallback(
+        bodies.get(hash) || item.snippet || "",
+        item.matchedPlayers.map((p) => p.name),
+        360,
+      );
     return { ...item, excerpt };
   });
 }
@@ -296,7 +315,7 @@ export async function sendDigestForLeague(params: {
     .slice(0, 15);
 
   const bodies = await resolveBodiesForDigest(items);
-  const itemsWithExcerpts = withExcerpts(items, bodies);
+  const itemsWithExcerpts = await withExcerpts(items, bodies);
 
   const injuryBoard = scope ? buildInjuryBoard(scope.players, scope.injuryDeltas) : [];
   const injuryLines = injuryBoard
