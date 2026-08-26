@@ -1,6 +1,6 @@
 import { createClient } from "@/lib/supabase/server";
 import { urlHash } from "@/lib/news/dedupe";
-import { fetchArticleBody } from "@/lib/news/article-body";
+import { fetchArticleBody, sanitizeArticleText } from "@/lib/news/article-body";
 import { embedText, embeddingText } from "@/lib/news/embeddings";
 import type { NewsItemView, NewsTriageStatus } from "@/lib/news/types";
 
@@ -84,13 +84,13 @@ async function enrichAndEmbed(
       .select("body")
       .eq("id", newsItemId)
       .maybeSingle();
-    if (!error && typeof existing?.body === "string" && existing.body.trim().length > 0) {
-      body = existing.body;
+    if (!error && typeof existing?.body === "string") {
+      body = sanitizeArticleText(existing.body);
     }
   }
 
   if (!body) {
-    body = await fetchArticleBody(item.url);
+    body = sanitizeArticleText(await fetchArticleBody(item.url));
     if (body) {
       const { error } = await supabase
         .from("news_items")
@@ -105,7 +105,7 @@ async function enrichAndEmbed(
   const embedding = await embedText(
     embeddingText({
       title: item.title,
-      snippet: item.snippet,
+      snippet: sanitizeArticleText(item.snippet) ?? item.snippet,
       body,
       source: item.source,
       severity: item.severity,
