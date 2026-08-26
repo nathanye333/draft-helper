@@ -2,6 +2,7 @@ import { createClient } from "@/lib/supabase/server";
 import { urlHash } from "@/lib/news/dedupe";
 import { fetchArticleBody, sanitizeArticleText } from "@/lib/news/article-body";
 import { embedText, embeddingText } from "@/lib/news/embeddings";
+import { indexBodyChunks } from "@/lib/news/body-chunks";
 import type { NewsItemView, NewsTriageStatus } from "@/lib/news/types";
 
 export async function persistNewsItems(
@@ -99,6 +100,25 @@ async function enrichAndEmbed(
       if (error) {
         console.warn("[enrichAndEmbed] body update failed:", error.message);
       }
+    }
+  }
+
+  const playerNames = item.matchedPlayers.map((p) => p.name);
+
+  // Passage-level embeddings for semantic digests / RAG.
+  if (body) {
+    try {
+      await indexBodyChunks(supabase, {
+        newsItemId,
+        title: item.title,
+        body,
+        playerNames,
+      });
+    } catch (err) {
+      console.warn(
+        "[enrichAndEmbed] body chunks failed:",
+        err instanceof Error ? err.message : err,
+      );
     }
   }
 
