@@ -82,7 +82,7 @@ function openSeasonAgent(leagueId: string, prompt: string) {
 }
 
 function groupChunksByUrlHash(chunks: FeedChunk[]): Map<string, FeedChunk[]> {
-  const map = new Map<string, RagChunk[]>();
+  const map = new Map<string, FeedChunk[]>();
   for (const c of chunks) {
     const key = c.urlHash?.trim();
     if (!key) continue;

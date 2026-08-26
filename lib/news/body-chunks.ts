@@ -3,9 +3,8 @@
  * Chunks article bodies at enrich time; digests/RAG rank passages by embedding similarity.
  */
 
-import { createAdminClient } from "@/lib/supabase/admin";
 import { embedText } from "@/lib/news/embeddings";
-import { splitBodyIntoChunks, pickRelevantChunks } from "@/lib/news/relevant-chunks";
+import { pickRelevantChunks, splitBodyIntoChunks } from "@/lib/news/relevant-chunks";
 import { urlHash } from "@/lib/news/dedupe";
 import type { NewsItemView } from "@/lib/news/types";
 
@@ -153,30 +152,9 @@ export interface MatchedBodyChunk {
 
 /**
  * Rank stored body chunks for digest items (admin / cron path).
- * Uses per-item hybrid ranking (player + keyword), not global semantic search.
+ * Implemented in feed-chunks.ts to avoid deep Supabase generic recursion here.
  */
-export async function semanticExcerptsByUrlHash(
-  items: Array<Pick<NewsItemView, "url" | "title" | "snippet" | "matchedPlayers" | "score" | "bucket">>,
-  opts: { maxChunksPerItem?: number; maxChars?: number } = {},
-): Promise<Map<string, string>> {
-  const { excerptsByUrlHashFromFeed } = await import("@/lib/news/feed-chunks");
-  const supabase = createAdminClient();
-  const feedItems = items.map((item) => ({
-    id: urlHash(item.url),
-    title: item.title,
-    url: item.url,
-    snippet: item.snippet,
-    source: "espn" as const,
-    severity: "news" as const,
-    bucket: item.bucket ?? ("fyi" as const),
-    score: item.score ?? 0,
-    publishedAt: null,
-    matchedPlayers: item.matchedPlayers,
-    corroborationCount: 1,
-    triageStatus: "new" as const,
-  }));
-  return excerptsByUrlHashFromFeed(supabase, feedItems, opts);
-}
+export { semanticExcerptsByUrlHash } from "@/lib/news/feed-chunks";
 
 /** Keyword fallback wrapper kept for callers that already have body text. */
 export function keywordExcerptFallback(

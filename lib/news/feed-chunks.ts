@@ -170,3 +170,32 @@ export async function excerptsByUrlHashFromFeed(
   }
   return out;
 }
+
+/** Digest/cron path — admin client with loose typing to avoid deep Supabase generics. */
+export async function semanticExcerptsByUrlHash(
+  items: Array<
+    Pick<
+      NewsItemView,
+      "url" | "title" | "snippet" | "matchedPlayers" | "score" | "bucket"
+    >
+  >,
+  opts: { maxChunksPerItem?: number; maxChars?: number } = {},
+): Promise<Map<string, string>> {
+  const { createAdminClient } = await import("@/lib/supabase/admin");
+  const supabase = createAdminClient() as unknown as SupabaseClient;
+  const feedItems: NewsItemView[] = items.map((item) => ({
+    id: urlHash(item.url),
+    title: item.title,
+    url: item.url,
+    snippet: item.snippet,
+    source: "espn",
+    severity: "news",
+    bucket: item.bucket ?? "fyi",
+    score: item.score ?? 0,
+    publishedAt: null,
+    matchedPlayers: item.matchedPlayers,
+    corroborationCount: 1,
+    triageStatus: "new",
+  }));
+  return excerptsByUrlHashFromFeed(supabase, feedItems, opts);
+}
