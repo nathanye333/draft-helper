@@ -18,6 +18,10 @@ import {
 import { buildNewsFeedForPlayers } from "@/lib/news/aggregate";
 import { buildInjuryBoard } from "@/lib/news/injury-board";
 import { isStarterSlot } from "@/lib/league/slot-order";
+import { urlHash } from "@/lib/news/dedupe";
+import { fetchArticleBody } from "@/lib/news/article-body";
+import { pickRelevantChunks } from "@/lib/news/relevant-chunks";
+import type { NewsItemView } from "@/lib/news/types";
 
 const URGENT_INJURY = new Set(["OUT", "IR", "DOUBTFUL", "INJURY_RESERVE"]);
 
@@ -44,6 +48,76 @@ async function leagueName(leagueId: string): Promise<string> {
   const supabase = createAdminClient();
   const { data } = await supabase.from("leagues").select("name").eq("id", leagueId).maybeSingle();
   return data?.name ? String(data.name) : "Your league";
+}
+
+/** Load stored article bodies by url_hash; fetch a few missing ones for digest quality. */
+async function resolveBodiesForDigest(
+  items: NewsItemView[],
+): Promise<Map<string, string>> {
+  const bodies = new Map<string, string>();
+  if (items.length === 0) return bodies;
+
+  const hashes = items.map((i) => urlHash(i.url));
+  const supabase = createAdminClient();
+  const { data } = await supabase
+    .from("news_items")
+    .select("url_hash, body, snippet")
+    .in("url_hash", hashes);
+
+  const byHash = new Map(
+    (data ?? []).map((row) => [
+      String(row.url_hash),
+      {
+        body: typeof row.body === "string" ? row.body : null,
+        snippet: typeof row.snippet === "string" ? row.snippet : null,
+      },
+    ]),
+  );
+
+  const missing: NewsItemView[] = [];
+  for (const item of items) {
+    const hash = urlHash(item.url);
+    const stored = byHash.get(hash);
+    if (stored?.body?.trim()) {
+      bodies.set(hash, stored.body.trim());
+      continue;
+    }
+    const fallback = stored?.snippet?.trim() || item.snippet?.trim() || "";
+    if (fallback) bodies.set(hash, fallback);
+    missing.push(item);
+  }
+
+  // Best-effort fetch for items still thin (cap to keep cron under maxDuration).
+  for (const item of missing.slice(0, 8)) {
+    const hash = urlHash(item.url);
+    if ((bodies.get(hash)?.length ?? 0) >= 200) continue;
+    const fetched = await fetchArticleBody(item.url);
+    if (!fetched) continue;
+    bodies.set(hash, fetched);
+    const { error } = await supabase
+      .from("news_items")
+      .update({ body: fetched })
+      .eq("url_hash", hash);
+    if (error) console.warn("[digest body update]", error.message);
+  }
+
+  return bodies;
+}
+
+function withExcerpts(
+  items: NewsItemView[],
+  bodies: Map<string, string>,
+): Array<NewsItemView & { excerpt: string }> {
+  return items.map((item) => {
+    const hash = urlHash(item.url);
+    const sourceText = bodies.get(hash) || item.snippet || "";
+    const excerpt = pickRelevantChunks(sourceText, {
+      playerNames: item.matchedPlayers.map((p) => p.name),
+      maxChunks: 2,
+      maxChars: 360,
+    });
+    return { ...item, excerpt };
+  });
 }
 
 export async function sendRedditSpikeAlertsForLeague(
@@ -220,6 +294,9 @@ export async function sendDigestForLeague(params: {
     .filter((i) => i.bucket === "needs_action" || i.bucket === "monitor" || i.score >= 4)
     .slice(0, 15);
 
+  const bodies = await resolveBodiesForDigest(items);
+  const itemsWithExcerpts = withExcerpts(items, bodies);
+
   const injuryBoard = scope ? buildInjuryBoard(scope.players, scope.injuryDeltas) : [];
   const injuryLines = injuryBoard
     .filter((p) => p.delta)
@@ -235,7 +312,7 @@ export async function sendDigestForLeague(params: {
     leagueName: name,
     appUrl: appBaseUrl(),
     leagueId: params.leagueId,
-    items,
+    items: itemsWithExcerpts,
     injuryLines,
   });
 
