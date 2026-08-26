@@ -123,6 +123,15 @@ export function pickRelevantChunks(
 ): string {
   const raw = text?.trim() ?? "";
   if (!raw) return "";
+  // Never surface Google News / Bing aggregator slogans as "excerpts".
+  if (/comprehensive up-to-date news coverage/i.test(raw)) {
+    const stripped = raw
+      .replace(/comprehensive up-to-date news coverage[\s\S]*?(?:google news\.?|bing news\.?)/gi, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (!stripped || stripped.length < 40) return "";
+    return pickRelevantChunks(stripped, opts);
+  }
 
   const maxChunks = opts.maxChunks ?? 2;
   const maxChars = opts.maxChars ?? 420;

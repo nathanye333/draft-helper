@@ -83,10 +83,16 @@ export function parseRssItems(
       ]),
     );
     if (!title || !url) continue;
+    // Google News often ships a generic site slogan or title+outlet HTML — not article text.
+    const cleanedSnippet = snippet
+      .replace(/comprehensive up-to-date news coverage[\s\S]*?google news\.?/gi, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    const looksLikeSlogan = /aggregated from sources all over the world/i.test(cleanedSnippet);
     items.push({
       title,
       url,
-      snippet: snippet.slice(0, 800),
+      snippet: looksLikeSlogan ? "" : cleanedSnippet.slice(0, 800),
       source,
       publishedAt: parseRssDate(pubDate),
     });

@@ -202,8 +202,41 @@ describe("article body extraction", () => {
       </body></html>
     `);
     expect(text).toContain("questionable with a shoulder injury");
-    expect(text).toContain("Injury update for Week 3");
+    // Short meta slogans are skipped; article body is the target field.
     expect(text).not.toContain("<p>");
+  });
+
+  it("rejects Google News aggregator slogan meta as body", async () => {
+    const { extractArticleText, sanitizeArticleText, isAggregatorBoilerplate } = await import(
+      "@/lib/news/article-body"
+    );
+    const slogan =
+      "Comprehensive up-to-date news coverage, aggregated from sources all over the world by Google News.";
+    expect(isAggregatorBoilerplate(slogan)).toBe(true);
+    expect(sanitizeArticleText(slogan)).toBeNull();
+    expect(sanitizeArticleText(`${slogan}\n${slogan}`)).toBeNull();
+
+    const text = extractArticleText(`
+      <html><head>
+        <meta name="description" content="${slogan}" />
+        <meta property="og:description" content="${slogan}" />
+      </head><body><main><p>Google News</p></main></body></html>
+    `);
+    expect(text).not.toMatch(/comprehensive up-to-date/i);
+  });
+
+  it("prefers embedded articleBody over page chrome", async () => {
+    const { extractArticleText } = await import("@/lib/news/article-body");
+    const text = extractArticleText(`
+      <html><body>
+        <nav>Scores Watch Betting Stories Sign In</nav>
+        <script type="application/ld+json">
+          {"@type":"NewsArticle","articleBody":"Patrick Mahomes was limited in practice with an ankle sprain and is expected to play Sunday."}
+        </script>
+      </body></html>
+    `);
+    expect(text).toContain("Patrick Mahomes was limited in practice");
+    expect(text).not.toContain("Sign In");
   });
 });
 

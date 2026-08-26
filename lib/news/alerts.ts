@@ -19,7 +19,7 @@ import { buildNewsFeedForPlayers } from "@/lib/news/aggregate";
 import { buildInjuryBoard } from "@/lib/news/injury-board";
 import { isStarterSlot } from "@/lib/league/slot-order";
 import { urlHash } from "@/lib/news/dedupe";
-import { fetchArticleBody } from "@/lib/news/article-body";
+import { fetchArticleBody, sanitizeArticleText } from "@/lib/news/article-body";
 import { pickRelevantChunks } from "@/lib/news/relevant-chunks";
 import type { NewsItemView } from "@/lib/news/types";
 
@@ -78,11 +78,12 @@ async function resolveBodiesForDigest(
   for (const item of items) {
     const hash = urlHash(item.url);
     const stored = byHash.get(hash);
-    if (stored?.body?.trim()) {
-      bodies.set(hash, stored.body.trim());
+    const storedBody = sanitizeArticleText(stored?.body);
+    if (storedBody) {
+      bodies.set(hash, storedBody);
       continue;
     }
-    const fallback = stored?.snippet?.trim() || item.snippet?.trim() || "";
+    const fallback = sanitizeArticleText(stored?.snippet) || sanitizeArticleText(item.snippet) || "";
     if (fallback) bodies.set(hash, fallback);
     missing.push(item);
   }
@@ -91,7 +92,7 @@ async function resolveBodiesForDigest(
   for (const item of missing.slice(0, 8)) {
     const hash = urlHash(item.url);
     if ((bodies.get(hash)?.length ?? 0) >= 200) continue;
-    const fetched = await fetchArticleBody(item.url);
+    const fetched = sanitizeArticleText(await fetchArticleBody(item.url));
     if (!fetched) continue;
     bodies.set(hash, fetched);
     const { error } = await supabase
