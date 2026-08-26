@@ -291,6 +291,61 @@ describe("relevant body chunks", () => {
   });
 });
 
+describe("feed chunk ranking", () => {
+  it("penalizes generic bust-list boilerplate", async () => {
+    const { isBoilerplateChunk, scoreChunkForFeedItem } = await import(
+      "@/lib/news/chunk-ranking"
+    );
+    const boilerplate =
+      "SportsLine simulated the new NFL season 10,000 times and identified Fantasy football busts 2026";
+    expect(isBoilerplateChunk(boilerplate)).toBe(true);
+
+    const item = {
+      id: "abc",
+      title: "Breece Hall injury update",
+      snippet: "",
+      score: 12,
+      bucket: "needs_action" as const,
+      matchedPlayers: [{ espnPlayerId: 1, name: "Breece Hall", scope: "roster" as const }],
+    };
+
+    const injuryPassage =
+      "Breece Hall was limited in practice with a knee issue and is questionable for Week 1.";
+    expect(scoreChunkForFeedItem(injuryPassage, item)).toBeGreaterThan(
+      scoreChunkForFeedItem(boilerplate, item),
+    );
+  });
+
+  it("prefers passages naming roster players over generic draft copy", async () => {
+    const { rankChunksForFeedItem } = await import("@/lib/news/chunk-ranking");
+    const item = {
+      id: "abc",
+      title: "Ja'Marr Chase injury update",
+      snippet: "",
+      score: 10,
+      bucket: "monitor" as const,
+      matchedPlayers: [{ espnPlayerId: 2, name: "Ja'Marr Chase", scope: "roster" as const }],
+    };
+    const ranked = rankChunksForFeedItem(
+      [
+        {
+          chunkIndex: 0,
+          content:
+            "With training camps in full swing, fantasy draft season is set to begin in earnest.",
+        },
+        {
+          chunkIndex: 1,
+          content:
+            "Ja'Marr Chase was held out of team drills with a hip flexor strain and is day-to-day.",
+        },
+      ],
+      item,
+    );
+    expect(ranked[0]?.content).toContain("Chase");
+    expect(ranked[0]?.content.toLowerCase()).toMatch(/hip|strain|drills/);
+  });
+});
+
 describe("semantic body chunk builder", () => {
   it("prefixes passages with title and players for embedding", async () => {
     const { buildBodyChunksForEmbed, cosineSimilarity } = await import(

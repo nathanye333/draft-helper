@@ -11,8 +11,6 @@ import type { NewsItemView } from "@/lib/news/types";
 
 const CHUNK_TARGET_CHARS = 320;
 const MAX_CHUNKS_PER_ARTICLE = 12;
-const DIGEST_QUERY =
-  "NFL fantasy football: player injuries ruled out practice status trades boom bust waiver targets";
 
 export interface BodyChunkForEmbed {
   chunkIndex: number;
@@ -155,92 +153,29 @@ export interface MatchedBodyChunk {
 
 /**
  * Rank stored body chunks for digest items (admin / cron path).
- * Falls back to empty map when embeddings or chunk rows are unavailable.
+ * Uses per-item hybrid ranking (player + keyword), not global semantic search.
  */
 export async function semanticExcerptsByUrlHash(
-  items: Array<Pick<NewsItemView, "url" | "title" | "snippet" | "matchedPlayers">>,
+  items: Array<Pick<NewsItemView, "url" | "title" | "snippet" | "matchedPlayers" | "score" | "bucket">>,
   opts: { maxChunksPerItem?: number; maxChars?: number } = {},
 ): Promise<Map<string, string>> {
-  const out = new Map<string, string>();
-  if (items.length === 0) return out;
-
-  const maxChunksPerItem = opts.maxChunksPerItem ?? 2;
-  const maxChars = opts.maxChars ?? 360;
-  const hashes = items.map((i) => urlHash(i.url));
-
+  const { excerptsByUrlHashFromFeed } = await import("@/lib/news/feed-chunks");
   const supabase = createAdminClient();
-  const { data: itemRows } = await supabase
-    .from("news_items")
-    .select("id, url_hash")
-    .in("url_hash", hashes);
-
-  const idByHash = new Map(
-    (itemRows ?? []).map((r) => [String(r.url_hash), String(r.id)]),
-  );
-  const ids = [...idByHash.values()];
-  if (ids.length === 0) return out;
-
-  const { data: chunkRows, error } = await supabase
-    .from("news_body_chunks")
-    .select("id, news_item_id, chunk_index, content, embedding")
-    .in("news_item_id", ids);
-
-  if (error || !chunkRows || chunkRows.length === 0) return out;
-
-  // One shared digest query embedding (cheap); boost with per-item player terms via keyword fallback.
-  const queryEmbedding = await embedText(DIGEST_QUERY);
-  if (!queryEmbedding) return out;
-
-  const hashById = new Map([...idByHash.entries()].map(([h, id]) => [id, h]));
-  const byHash = new Map<string, Array<{ content: string; score: number; index: number }>>();
-
-  for (const row of chunkRows) {
-    const hash = hashById.get(String(row.news_item_id));
-    if (!hash) continue;
-    let embedding: number[] | null = null;
-    try {
-      embedding =
-        typeof row.embedding === "string"
-          ? (JSON.parse(row.embedding) as number[])
-          : Array.isArray(row.embedding)
-            ? (row.embedding as number[])
-            : null;
-    } catch {
-      continue;
-    }
-    if (!embedding) continue;
-    const score = cosineSimilarity(queryEmbedding, embedding);
-    const list = byHash.get(hash) ?? [];
-    list.push({
-      content: String(row.content),
-      score,
-      index: Number(row.chunk_index),
-    });
-    byHash.set(hash, list);
-  }
-
-  for (const item of items) {
-    const hash = urlHash(item.url);
-    const ranked = (byHash.get(hash) ?? [])
-      .sort((a, b) => b.score - a.score || a.index - b.index)
-      .slice(0, maxChunksPerItem)
-      .sort((a, b) => a.index - b.index);
-
-    if (ranked.length === 0) continue;
-
-    let excerpt = "";
-    for (const piece of ranked) {
-      const next = excerpt ? `${excerpt} … ${piece.content}` : piece.content;
-      if (next.length > maxChars) {
-        if (!excerpt) excerpt = piece.content.slice(0, maxChars).trim();
-        break;
-      }
-      excerpt = next;
-    }
-    if (excerpt) out.set(hash, excerpt.trim());
-  }
-
-  return out;
+  const feedItems = items.map((item) => ({
+    id: urlHash(item.url),
+    title: item.title,
+    url: item.url,
+    snippet: item.snippet,
+    source: "espn" as const,
+    severity: "news" as const,
+    bucket: item.bucket ?? ("fyi" as const),
+    score: item.score ?? 0,
+    publishedAt: null,
+    matchedPlayers: item.matchedPlayers,
+    corroborationCount: 1,
+    triageStatus: "new" as const,
+  }));
+  return excerptsByUrlHashFromFeed(supabase, feedItems, opts);
 }
 
 /** Keyword fallback wrapper kept for callers that already have body text. */

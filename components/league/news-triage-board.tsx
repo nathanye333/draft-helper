@@ -53,7 +53,7 @@ function formatRelativeTime(iso: string | null): string {
   return `${days}d ago`;
 }
 
-interface RagChunk {
+interface FeedChunk {
   urlHash?: string;
   title: string;
   snippet: string;
@@ -61,13 +61,10 @@ interface RagChunk {
   body: string | null;
   source: string;
   publishedAt: string | null;
-  similarity: number;
+  relevanceScore: number;
 }
 
-const RAG_QUERY =
-  "NFL fantasy football news: player injuries, trades, standout performances, busts, waiver wire targets";
-
-function chunkPassage(c: RagChunk): string {
+function chunkPassage(c: FeedChunk): string {
   const passage = c.content?.trim() || "";
   if (passage) return passage;
   return pickRelevantChunks(c.body || c.snippet, {
@@ -84,7 +81,7 @@ function openSeasonAgent(leagueId: string, prompt: string) {
   );
 }
 
-function groupChunksByUrlHash(chunks: RagChunk[]): Map<string, RagChunk[]> {
+function groupChunksByUrlHash(chunks: FeedChunk[]): Map<string, FeedChunk[]> {
   const map = new Map<string, RagChunk[]>();
   for (const c of chunks) {
     const key = c.urlHash?.trim();
@@ -147,7 +144,7 @@ export function NewsTriageBoard({ leagueId }: { leagueId: string }) {
   const [unreadOnly, setUnreadOnly] = useState(false);
   const [searchText, setSearchText] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
-  const [chunksByHash, setChunksByHash] = useState<Map<string, RagChunk[]>>(new Map());
+  const [chunksByHash, setChunksByHash] = useState<Map<string, FeedChunk[]>>(new Map());
   const [chunksLoading, setChunksLoading] = useState(false);
   const [chunksError, setChunksError] = useState<string | null>(null);
   const [summaryBusy, setSummaryBusy] = useState(false);
@@ -185,34 +182,47 @@ export function NewsTriageBoard({ leagueId }: { leagueId: string }) {
     void load(false);
   }, [load, leagueId]);
 
-  const loadSemanticChunks = useCallback(async (): Promise<boolean> => {
-    const res = await fetch(`/api/leagues/${leagueId}/news/rag`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        query: RAG_QUERY,
-        matchCount: 20,
-        matchThreshold: 0.2,
-      }),
-    });
-    if (!res.ok) {
-      const body = (await res.json().catch(() => ({}))) as { error?: unknown };
-      const msg =
-        typeof body.error === "string"
-          ? body.error
-          : body.error
-            ? "Chunk search failed (invalid request)"
-            : `Chunk search failed (HTTP ${res.status})`;
-      throw new Error(msg);
-    }
-    const json = (await res.json()) as { chunks?: RagChunk[] };
-    setChunksByHash(groupChunksByUrlHash(json.chunks ?? []));
-    setChunksError(null);
-    return (json.chunks?.length ?? 0) > 0;
-  }, [leagueId]);
+  const loadFeedChunks = useCallback(
+    async (feed: NewsItemView[]): Promise<FeedChunk[]> => {
+      if (feed.length === 0) {
+        setChunksByHash(new Map());
+        return [];
+      }
+      const res = await fetch(`/api/leagues/${leagueId}/news/feed-chunks`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          items: feed.map((item) => ({
+            id: item.id,
+            title: item.title,
+            snippet: item.snippet,
+            score: item.score,
+            bucket: item.bucket,
+            matchedPlayers: item.matchedPlayers,
+          })),
+          maxChunksPerItem: 2,
+        }),
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: unknown };
+        const msg =
+          typeof body.error === "string"
+            ? body.error
+            : body.error
+              ? "Chunk ranking failed (invalid request)"
+              : `Chunk ranking failed (HTTP ${res.status})`;
+        throw new Error(msg);
+      }
+      const json = (await res.json()) as { chunks?: FeedChunk[] };
+      const chunks = json.chunks ?? [];
+      setChunksByHash(groupChunksByUrlHash(chunks));
+      setChunksError(null);
+      return chunks;
+    },
+    [leagueId],
+  );
 
-  // Load semantically ranked body chunks for the feed (shown on cards + used in summary).
-  // Enrich/index runs async after refresh — retry so passages appear once bodies are embedded.
+  // Rank body passages per feed item (player + keyword), not global semantic search.
   useEffect(() => {
     if (!data?.feed.length) {
       setChunksByHash(new Map());
@@ -225,7 +235,7 @@ export function NewsTriageBoard({ leagueId }: { leagueId: string }) {
 
     const run = async () => {
       try {
-        await loadSemanticChunks();
+        await loadFeedChunks(data.feed);
       } catch (err) {
         if (!cancelled) {
           setChunksByHash(new Map());
@@ -241,10 +251,10 @@ export function NewsTriageBoard({ leagueId }: { leagueId: string }) {
     void run();
 
     const retry1 = window.setTimeout(() => {
-      if (!cancelled) void loadSemanticChunks().catch(() => undefined);
+      if (!cancelled) void loadFeedChunks(data.feed).catch(() => undefined);
     }, 5000);
     const retry2 = window.setTimeout(() => {
-      if (!cancelled) void loadSemanticChunks().catch(() => undefined);
+      if (!cancelled) void loadFeedChunks(data.feed).catch(() => undefined);
     }, 15000);
 
     return () => {
@@ -252,7 +262,7 @@ export function NewsTriageBoard({ leagueId }: { leagueId: string }) {
       window.clearTimeout(retry1);
       window.clearTimeout(retry2);
     };
-  }, [data?.feed, data?.fetchedAt, leagueId, loadSemanticChunks]);
+  }, [data?.feed, data?.fetchedAt, leagueId, loadFeedChunks]);
 
   const filteredFeed = useMemo(
     () =>
@@ -307,44 +317,31 @@ export function NewsTriageBoard({ leagueId }: { leagueId: string }) {
 
     try {
       // Prefer already-loaded page chunks; refresh if empty.
-      let ragChunks = [...chunksByHash.values()].flat();
-      if (ragChunks.length === 0) {
+      let feedChunks = [...chunksByHash.values()].flat();
+      if (feedChunks.length === 0) {
         try {
-          const res = await fetch(`/api/leagues/${leagueId}/news/rag`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              query: RAG_QUERY,
-              matchCount: 12,
-              matchThreshold: 0.25,
-            }),
-          });
-          if (res.ok) {
-            const json = (await res.json()) as { chunks?: RagChunk[] };
-            ragChunks = json.chunks ?? [];
-            if (ragChunks.length > 0) setChunksByHash(groupChunksByUrlHash(ragChunks));
-          }
+          feedChunks = await loadFeedChunks(feed);
         } catch {
           // fall through to heuristic
         }
       }
 
-      if (ragChunks.length > 0) {
+      if (feedChunks.length > 0) {
         openSeasonAgent(
           leagueId,
           [
-            "Summarize the following NFL fantasy news retrieved via semantic search (most relevant to your league).",
+            "Summarize the following NFL fantasy news for my league (each passage is from a story already matched to my roster/watchlist).",
             "Return in 3 sections: (1) Key story themes (up to 6) with one-liners, (2) Lineup/roster impact per theme (injuries, trades, boom-bust, performance), (3) Players/teams to watch next (start/sit, waiver adds, trade targets, monitor).",
             "Use the provided chunk passages as primary evidence. Do not invent numbers. Use league tools if needed for roster/waiver context.",
             "",
-            "Retrieved body chunks (ranked by relevance):",
+            "Ranked body passages (per story, player/keyword scored):",
             JSON.stringify(
-              ragChunks.map((c) => ({
+              feedChunks.map((c) => ({
                 title: c.title,
                 chunk: chunkPassage(c) || c.snippet?.slice(0, 400) || undefined,
                 source: c.source,
                 publishedAt: c.publishedAt,
-                similarity: Math.round(c.similarity * 100) / 100,
+                relevanceScore: Math.round(c.relevanceScore * 10) / 10,
               })),
               null,
               2,
@@ -462,7 +459,7 @@ export function NewsTriageBoard({ leagueId }: { leagueId: string }) {
           <span className="text-xs text-slate-500">Loading body chunks…</span>
         ) : chunksByHash.size > 0 ? (
           <span className="text-xs text-slate-500">
-            {chunksByHash.size} articles with semantic chunks
+            {chunksByHash.size} stories with ranked passages
           </span>
         ) : chunksError ? (
           <span className="text-xs text-amber-500/90">{chunksError}</span>
