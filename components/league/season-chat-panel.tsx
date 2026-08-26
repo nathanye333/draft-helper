@@ -187,6 +187,7 @@ export function SeasonChatPanel({
   const [error, setError] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [hasServerOpenAiKey, setHasServerOpenAiKey] = useState(false);
+  const [serverKeyChecked, setServerKeyChecked] = useState(false);
   const [modelOptions, setModelOptions] = useState<string[]>(() =>
     fallbackModels(settings.provider),
   );
@@ -198,7 +199,8 @@ export function SeasonChatPanel({
   const sessionsMenuRef = useRef<HTMLDivElement>(null);
   const scanSeq = useRef(0);
   const sentSeedsRef = useRef(new Set<string>());
-  const sendRef = useRef<(text?: string) => Promise<void>>(async () => undefined);
+  const seedSendInFlightRef = useRef<string | null>(null);
+  const sendRef = useRef<(text?: string) => Promise<boolean>>(async () => false);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -329,6 +331,8 @@ export function SeasonChatPanel({
         }
       } catch {
         if (!cancelled) setHasServerOpenAiKey(false);
+      } finally {
+        if (!cancelled) setServerKeyChecked(true);
       }
     })();
     return () => {
@@ -441,12 +445,15 @@ export function SeasonChatPanel({
   async function send(textOverride?: string) {
     const text = (textOverride ?? input).trim();
     if (!canSendText(text)) {
-      // Seeded prompts: leave text in the box if we can't send yet (e.g. missing key).
-      if (textOverride?.trim() && needsClientOpenAiKey) setInput(textOverride.trim());
-      return;
+      // Seeded prompts: keep text visible until settings/session are ready.
+      if (textOverride?.trim()) setInput(textOverride.trim());
+      return false;
     }
     setError(null);
     setInput("");
+    if (textOverride?.trim()) {
+      sentSeedsRef.current.add(textOverride.trim().slice(0, 240));
+    }
     const userMsg: ChatMessage = { id: newId(), role: "user", content: text };
     const assistantId = newId();
     const history = [...messages, userMsg];
@@ -620,11 +627,16 @@ export function SeasonChatPanel({
       } else {
         setError(err instanceof Error ? err.message : "Chat failed");
         setMessages((prev) => prev.filter((m) => m.id !== assistantId));
+        if (textOverride?.trim()) {
+          sentSeedsRef.current.delete(textOverride.trim().slice(0, 240));
+        }
+        return false;
       }
     } finally {
       setBusy(false);
       abortRef.current = null;
     }
+    return true;
   }
 
   sendRef.current = send;
@@ -633,15 +645,38 @@ export function SeasonChatPanel({
     if (!seedPrompt?.trim()) return;
     const text = seedPrompt.trim();
     const key = text.slice(0, 240);
+
     if (sentSeedsRef.current.has(key)) {
       onSeedPromptConsumed?.();
       return;
     }
-    sentSeedsRef.current.add(key);
-    onSeedPromptConsumed?.();
-    // Auto-send immediately — do not leave the prompt sitting in the input.
-    void sendRef.current(text);
-  }, [seedPrompt, onSeedPromptConsumed]);
+
+    // Wait until session list + server key probe finish so canSendText is accurate.
+    if (sessionsLoading || !serverKeyChecked) return;
+
+    if (seedSendInFlightRef.current === key) return;
+    seedSendInFlightRef.current = key;
+
+    void (async () => {
+      try {
+        const sent = await sendRef.current(text);
+        if (sent) onSeedPromptConsumed?.();
+      } finally {
+        if (seedSendInFlightRef.current === key) seedSendInFlightRef.current = null;
+      }
+    })();
+  }, [
+    seedPrompt,
+    onSeedPromptConsumed,
+    sessionsLoading,
+    serverKeyChecked,
+    busy,
+    settings.model,
+    settings.provider,
+    settings.apiKey,
+    needsClientOpenAiKey,
+    hasServerOpenAiKey,
+  ]);
 
   const activeSessionTitle =
     sessions.find((s) => s.id === activeSessionId)?.title ?? "Chat";

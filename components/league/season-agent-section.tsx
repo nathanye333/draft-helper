@@ -26,6 +26,7 @@ export function SeasonAgentSection({ leagueId }: { leagueId: string }) {
     const handler = (event: Event) => {
       const detail = (event as CustomEvent<{ leagueId: string; prompt: string }>).detail;
       if (!detail || detail.leagueId !== leagueId) return;
+      setMountedChat(true);
       setSeedPrompt(detail.prompt);
       setOpen(true);
     };
