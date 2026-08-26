@@ -54,6 +54,7 @@ function formatRelativeTime(iso: string | null): string {
 }
 
 interface RagChunk {
+  urlHash?: string;
   title: string;
   snippet: string;
   content?: string | null;
@@ -63,12 +64,37 @@ interface RagChunk {
   similarity: number;
 }
 
+const RAG_QUERY =
+  "NFL fantasy football news: player injuries, trades, standout performances, busts, waiver wire targets";
+
+function chunkPassage(c: RagChunk): string {
+  const passage = c.content?.trim() || "";
+  if (passage) return passage;
+  return pickRelevantChunks(c.body || c.snippet, {
+    maxChunks: 2,
+    maxChars: 420,
+  });
+}
+
 function openSeasonAgent(leagueId: string, prompt: string) {
   window.dispatchEvent(
     new CustomEvent("season-agent-prompt", {
       detail: { leagueId, prompt },
     }),
   );
+}
+
+function groupChunksByUrlHash(chunks: RagChunk[]): Map<string, RagChunk[]> {
+  const map = new Map<string, RagChunk[]>();
+  for (const c of chunks) {
+    const key = c.urlHash?.trim();
+    if (!key) continue;
+    const list = map.get(key) ?? [];
+    if (list.length >= 2) continue;
+    list.push(c);
+    map.set(key, list);
+  }
+  return map;
 }
 
 function toMs(iso: string | null): number {
@@ -121,6 +147,9 @@ export function NewsTriageBoard({ leagueId }: { leagueId: string }) {
   const [unreadOnly, setUnreadOnly] = useState(false);
   const [searchText, setSearchText] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
+  const [chunksByHash, setChunksByHash] = useState<Map<string, RagChunk[]>>(new Map());
+  const [chunksLoading, setChunksLoading] = useState(false);
+  const [summaryBusy, setSummaryBusy] = useState(false);
 
   useEffect(() => {
     const t = window.setTimeout(() => setDebouncedSearch(searchText), 250);
@@ -154,6 +183,39 @@ export function NewsTriageBoard({ leagueId }: { leagueId: string }) {
   useEffect(() => {
     void load(false);
   }, [load, leagueId]);
+
+  // Load semantically ranked body chunks for the feed (shown on cards + used in summary).
+  useEffect(() => {
+    if (!data?.feed.length) {
+      setChunksByHash(new Map());
+      return;
+    }
+    let cancelled = false;
+    setChunksLoading(true);
+    void (async () => {
+      try {
+        const res = await fetch(`/api/leagues/${leagueId}/news/rag`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            query: RAG_QUERY,
+            matchCount: 24,
+            matchThreshold: 0.2,
+          }),
+        });
+        if (!res.ok || cancelled) return;
+        const json = (await res.json()) as { chunks?: RagChunk[] };
+        if (!cancelled) setChunksByHash(groupChunksByUrlHash(json.chunks ?? []));
+      } catch {
+        if (!cancelled) setChunksByHash(new Map());
+      } finally {
+        if (!cancelled) setChunksLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [data?.feed, leagueId]);
 
   const filteredFeed = useMemo(
     () =>
@@ -203,92 +265,86 @@ export function NewsTriageBoard({ leagueId }: { leagueId: string }) {
 
   const openNewsSummary = async () => {
     const feed = filteredFeed;
-    if (!feed.length) return;
-
-    // RAG retrieval: ask the server to embed a broad query and return the
-    // most semantically relevant news chunks from the stored embeddings.
-    // Falls back to the full filtered feed if embeddings aren't available yet.
-    const RAG_QUERY =
-      "NFL fantasy football news: player injuries, trades, standout performances, busts, waiver wire targets";
-
-    let ragChunks: RagChunk[] | null = null;
+    if (!feed.length || summaryBusy) return;
+    setSummaryBusy(true);
 
     try {
-      const res = await fetch(`/api/leagues/${leagueId}/news/rag`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ query: RAG_QUERY, matchCount: 12, matchThreshold: 0.25 }),
-      });
-      if (res.ok) {
-        const json = (await res.json()) as { chunks?: RagChunk[] };
-        if (json.chunks && json.chunks.length > 0) ragChunks = json.chunks;
+      // Prefer already-loaded page chunks; refresh if empty.
+      let ragChunks = [...chunksByHash.values()].flat();
+      if (ragChunks.length === 0) {
+        try {
+          const res = await fetch(`/api/leagues/${leagueId}/news/rag`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              query: RAG_QUERY,
+              matchCount: 12,
+              matchThreshold: 0.25,
+            }),
+          });
+          if (res.ok) {
+            const json = (await res.json()) as { chunks?: RagChunk[] };
+            ragChunks = json.chunks ?? [];
+            if (ragChunks.length > 0) setChunksByHash(groupChunksByUrlHash(ragChunks));
+          }
+        } catch {
+          // fall through to heuristic
+        }
       }
-    } catch {
-      // network error — fall back
-    }
 
-    if (ragChunks) {
-      // RAG path: feed retrieved, semantically ranked chunks to the LLM.
-      // Prefer the most relevant body passages over a blind lead-in truncate.
-      openSeasonAgent(
-        leagueId,
-        [
-          "Summarize the following NFL fantasy news retrieved via semantic search (most relevant to your league).",
-          "Return in 3 sections: (1) Key story themes (up to 6) with one-liners, (2) Lineup/roster impact per theme (injuries, trades, boom-bust, performance), (3) Players/teams to watch next (start/sit, waiver adds, trade targets, monitor).",
-          "Use the article body excerpts when present; fall back to snippet only if body is missing. Use league tools if needed for roster/waiver context. Do not invent numbers.",
-          "",
-          "Retrieved news (ranked by relevance):",
-          JSON.stringify(
-            ragChunks.map((c) => {
-              const passage = c.content?.trim() || "";
-              const excerpt =
-                passage ||
-                pickRelevantChunks(c.body || c.snippet, {
-                  maxChunks: 2,
-                  maxChars: 500,
-                });
-              return {
+      if (ragChunks.length > 0) {
+        openSeasonAgent(
+          leagueId,
+          [
+            "Summarize the following NFL fantasy news retrieved via semantic search (most relevant to your league).",
+            "Return in 3 sections: (1) Key story themes (up to 6) with one-liners, (2) Lineup/roster impact per theme (injuries, trades, boom-bust, performance), (3) Players/teams to watch next (start/sit, waiver adds, trade targets, monitor).",
+            "Use the provided chunk passages as primary evidence. Do not invent numbers. Use league tools if needed for roster/waiver context.",
+            "",
+            "Retrieved body chunks (ranked by relevance):",
+            JSON.stringify(
+              ragChunks.map((c) => ({
                 title: c.title,
-                excerpt: excerpt || c.snippet?.slice(0, 400) || undefined,
+                chunk: chunkPassage(c) || c.snippet?.slice(0, 400) || undefined,
                 source: c.source,
                 publishedAt: c.publishedAt,
                 similarity: Math.round(c.similarity * 100) / 100,
-              };
-            }),
-            null,
-            2,
-          ),
+              })),
+              null,
+              2,
+            ),
+          ].join("\n"),
+        );
+        return;
+      }
+
+      const triaged = feed.map((item) => ({
+        title: item.title,
+        publishedAt: item.publishedAt,
+        source: item.source,
+        bucket: item.bucket,
+        matchedPlayers: item.matchedPlayers.map((p) => `${p.name} (${p.scope})`),
+        relevantSnippet: pickRelevantChunks(item.snippet, {
+          playerNames: item.matchedPlayers.map((p) => p.name),
+          maxChunks: 1,
+          maxChars: 220,
+        }),
+      }));
+
+      openSeasonAgent(
+        leagueId,
+        [
+          "Summarize ALL of the news items currently shown in my triage feed.",
+          "For each story, only use the provided relevantSnippet (ignore the rest).",
+          "Return in 3 sections: (1) Top story themes (5-6) with one-liners, (2) Why each theme matters to my lineup, (3) Players/teams to watch next.",
+          "Use league tools if needed for roster/waiver context. Do not invent numbers.",
+          "",
+          "News items:",
+          JSON.stringify(triaged, null, 2),
         ].join("\n"),
       );
-      return;
+    } finally {
+      setSummaryBusy(false);
     }
-
-    // Heuristic fallback (no embeddings yet — e.g. first run)
-    const triaged = feed.map((item) => ({
-      title: item.title,
-      publishedAt: item.publishedAt,
-      source: item.source,
-      bucket: item.bucket,
-      matchedPlayers: item.matchedPlayers.map((p) => `${p.name} (${p.scope})`),
-      relevantSnippet: pickRelevantChunks(item.snippet, {
-        playerNames: item.matchedPlayers.map((p) => p.name),
-        maxChunks: 1,
-        maxChars: 220,
-      }),
-    }));
-
-    openSeasonAgent(
-      leagueId,
-      [
-        "Summarize ALL of the news items currently shown in my triage feed.",
-        "For each story, only use the provided relevantSnippet (ignore the rest).",
-        "Return in 3 sections: (1) Top story themes (5-6) with one-liners, (2) Why each theme matters to my lineup, (3) Players/teams to watch next.",
-        "Use league tools if needed for roster/waiver context. Do not invent numbers.",
-        "",
-        "News items:",
-        JSON.stringify(triaged, null, 2),
-      ].join("\n"),
-    );
   };
 
   return (
@@ -360,11 +416,18 @@ export function NewsTriageBoard({ leagueId }: { leagueId: string }) {
           type="button"
           size="sm"
           variant="secondary"
-          disabled={loading || (filteredFeed?.length ?? 0) === 0}
+          disabled={loading || summaryBusy || (filteredFeed?.length ?? 0) === 0}
           onClick={() => void openNewsSummary()}
         >
-          LLM summary
+          {summaryBusy ? "Starting…" : "LLM summary"}
         </Button>
+        {chunksLoading ? (
+          <span className="text-xs text-slate-500">Loading body chunks…</span>
+        ) : chunksByHash.size > 0 ? (
+          <span className="text-xs text-slate-500">
+            {chunksByHash.size} articles with semantic chunks
+          </span>
+        ) : null}
         {data?.cached ? (
           <span className="text-xs text-slate-500">Cached feed (10 min)</span>
         ) : null}
@@ -432,6 +495,18 @@ export function NewsTriageBoard({ leagueId }: { leagueId: string }) {
                 {item.snippet ? (
                   <p className="mt-1 text-sm text-slate-400">{item.snippet}</p>
                 ) : null}
+                {(chunksByHash.get(item.id) ?? []).map((c, idx) => {
+                  const passage = chunkPassage(c);
+                  if (!passage) return null;
+                  return (
+                    <p
+                      key={`${item.id}-chunk-${idx}`}
+                      className="mt-2 border-l-2 border-emerald-800/70 pl-2 text-xs leading-relaxed text-slate-300"
+                    >
+                      {passage}
+                    </p>
+                  );
+                })}
                 <div className="mt-2 flex flex-wrap gap-2">
                   {item.matchedPlayers.map((p) => (
                     <PlayerLink key={p.espnPlayerId} leagueId={leagueId} espnPlayerId={p.espnPlayerId}>
@@ -444,12 +519,24 @@ export function NewsTriageBoard({ leagueId }: { leagueId: string }) {
                     type="button"
                     size="sm"
                     variant="secondary"
-                    onClick={() =>
+                    onClick={() => {
+                      const passages = (chunksByHash.get(item.id) ?? [])
+                        .map(chunkPassage)
+                        .filter(Boolean);
                       openSeasonAgent(
                         leagueId,
-                        `Explain this news for my lineup: "${item.title}". Players: ${item.matchedPlayers.map((p) => p.name).join(", ")}. What should I do?`,
-                      )
-                    }
+                        [
+                          `Explain this news for my lineup: "${item.title}".`,
+                          `Players: ${item.matchedPlayers.map((p) => p.name).join(", ") || "—"}.`,
+                          passages.length
+                            ? `Relevant body chunks:\n${passages.map((p) => `- ${p}`).join("\n")}`
+                            : null,
+                          "What should I do?",
+                        ]
+                          .filter(Boolean)
+                          .join("\n\n"),
+                      );
+                    }}
                   >
                     Ask agent
                   </Button>

@@ -197,16 +197,12 @@ export function SeasonChatPanel({
   const bottomRef = useRef<HTMLDivElement>(null);
   const sessionsMenuRef = useRef<HTMLDivElement>(null);
   const scanSeq = useRef(0);
+  const sentSeedsRef = useRef(new Set<string>());
+  const sendRef = useRef<(text?: string) => Promise<void>>(async () => undefined);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, busy]);
-
-  useEffect(() => {
-    if (!seedPrompt?.trim()) return;
-    setInput(seedPrompt);
-    onSeedPromptConsumed?.();
-  }, [seedPrompt, onSeedPromptConsumed]);
 
   useEffect(() => {
     if (!sessionsOpen) return;
@@ -411,12 +407,19 @@ export function SeasonChatPanel({
   const needsClientOpenAiKey =
     settings.provider === "openai" && !settings.apiKey.trim() && !hasServerOpenAiKey;
 
-  const canSend = useMemo(() => {
-    if (!input.trim() || busy) return false;
+  const canSendText = (text: string) => {
+    if (!text.trim() || busy) return false;
     if (!(settings.model.trim() || providerDefaults(settings.provider).model)) return false;
     if (needsClientOpenAiKey) return false;
     return true;
-  }, [input, busy, settings.model, settings.provider, needsClientOpenAiKey]);
+  };
+
+  const canSend = useMemo(
+    () => canSendText(input),
+    // canSendText closes over busy/settings — list those deps explicitly
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [input, busy, settings.model, settings.provider, needsClientOpenAiKey],
+  );
 
   function updateSettings(patch: Partial<StoredLlmSettings>) {
     persistSettings({ ...settings, ...patch });
@@ -435,9 +438,13 @@ export function SeasonChatPanel({
     setModelsError(null);
   }
 
-  async function send() {
-    const text = input.trim();
-    if (!text || busy || !canSend) return;
+  async function send(textOverride?: string) {
+    const text = (textOverride ?? input).trim();
+    if (!canSendText(text)) {
+      // Seeded prompts: leave text in the box if we can't send yet (e.g. missing key).
+      if (textOverride?.trim() && needsClientOpenAiKey) setInput(textOverride.trim());
+      return;
+    }
     setError(null);
     setInput("");
     const userMsg: ChatMessage = { id: newId(), role: "user", content: text };
@@ -619,6 +626,22 @@ export function SeasonChatPanel({
       abortRef.current = null;
     }
   }
+
+  sendRef.current = send;
+
+  useEffect(() => {
+    if (!seedPrompt?.trim()) return;
+    const text = seedPrompt.trim();
+    const key = text.slice(0, 240);
+    if (sentSeedsRef.current.has(key)) {
+      onSeedPromptConsumed?.();
+      return;
+    }
+    sentSeedsRef.current.add(key);
+    onSeedPromptConsumed?.();
+    // Auto-send immediately — do not leave the prompt sitting in the input.
+    void sendRef.current(text);
+  }, [seedPrompt, onSeedPromptConsumed]);
 
   const activeSessionTitle =
     sessions.find((s) => s.id === activeSessionId)?.title ?? "Chat";
