@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select } from "@/components/ui/select";
 import { sourceLabel } from "@/lib/news/rank";
+import { pickRelevantChunks } from "@/lib/news/relevant-chunks";
 import type {
   NewsBucket,
   NewsItemView,
@@ -227,24 +228,29 @@ export function NewsTriageBoard({ leagueId }: { leagueId: string }) {
 
     if (ragChunks) {
       // RAG path: feed retrieved, semantically ranked chunks to the LLM.
-      // Prefer article body over caption-only snippets for accurate summaries.
+      // Prefer the most relevant body passages over a blind lead-in truncate.
       openSeasonAgent(
         leagueId,
         [
           "Summarize the following NFL fantasy news retrieved via semantic search (most relevant to your league).",
           "Return in 3 sections: (1) Key story themes (up to 6) with one-liners, (2) Lineup/roster impact per theme (injuries, trades, boom-bust, performance), (3) Players/teams to watch next (start/sit, waiver adds, trade targets, monitor).",
-          "Use the article body when present; fall back to snippet only if body is missing. Use league tools if needed for roster/waiver context. Do not invent numbers.",
+          "Use the article body excerpts when present; fall back to snippet only if body is missing. Use league tools if needed for roster/waiver context. Do not invent numbers.",
           "",
           "Retrieved news (ranked by relevance):",
           JSON.stringify(
-            ragChunks.map((c) => ({
-              title: c.title,
-              snippet: c.snippet?.slice(0, 400) || undefined,
-              body: c.body?.slice(0, 1_500) || undefined,
-              source: c.source,
-              publishedAt: c.publishedAt,
-              similarity: Math.round(c.similarity * 100) / 100,
-            })),
+            ragChunks.map((c) => {
+              const excerpt = pickRelevantChunks(c.body || c.snippet, {
+                maxChunks: 2,
+                maxChars: 500,
+              });
+              return {
+                title: c.title,
+                excerpt: excerpt || c.snippet?.slice(0, 400) || undefined,
+                source: c.source,
+                publishedAt: c.publishedAt,
+                similarity: Math.round(c.similarity * 100) / 100,
+              };
+            }),
             null,
             2,
           ),
@@ -254,37 +260,17 @@ export function NewsTriageBoard({ leagueId }: { leagueId: string }) {
     }
 
     // Heuristic fallback (no embeddings yet — e.g. first run)
-    const KEYWORD_HINTS = [
-      "injury", "injured", "ruled out", "out for", "inactive", "doubtful",
-      "questionable", "limited", "did not practice", "dnp", "ir ", "injured reserve",
-      "traded", "trade for", "acquired", "sent to", "deal for", "in a trade",
-      "career high", "career-high", "monster game", "breakout", "touchdowns",
-      "fantasy points", "standout", "sleeper",
-      "bust", "busted", "dud", "disappointing", "worst game",
-      "season low", "career low", "goose egg", "zero points",
-    ];
-
-    const extractRelevantSnippet = (snippet: string) => {
-      const s = snippet ?? "";
-      if (!s.trim()) return s;
-      const lower = s.toLowerCase();
-      let bestIdx: number | null = null;
-      for (const hint of KEYWORD_HINTS) {
-        const idx = lower.indexOf(hint.toLowerCase());
-        if (idx === -1) continue;
-        if (bestIdx == null || idx < bestIdx) bestIdx = idx;
-      }
-      if (bestIdx == null) return s.slice(0, 120);
-      return s.slice(Math.max(0, bestIdx - 60), Math.min(s.length, bestIdx + 160));
-    };
-
     const triaged = feed.map((item) => ({
       title: item.title,
       publishedAt: item.publishedAt,
       source: item.source,
       bucket: item.bucket,
       matchedPlayers: item.matchedPlayers.map((p) => `${p.name} (${p.scope})`),
-      relevantSnippet: extractRelevantSnippet(item.snippet),
+      relevantSnippet: pickRelevantChunks(item.snippet, {
+        playerNames: item.matchedPlayers.map((p) => p.name),
+        maxChunks: 1,
+        maxChars: 220,
+      }),
     }));
 
     openSeasonAgent(

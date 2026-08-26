@@ -223,6 +223,7 @@ describe("digest email template", () => {
           source: "espn",
           matchedPlayers: [{ espnPlayerId: 1, name: "Patrick Mahomes", scope: "roster" }],
           score: 10,
+          excerpt: "Mahomes is ruled out with an ankle sprain and will miss Sunday.",
         },
       ],
       injuryLines: ["Patrick Mahomes: Q → OUT (starter)"],
@@ -230,8 +231,29 @@ describe("digest email template", () => {
     expect(subject).toContain("Test League");
     expect(text).toContain("Daily news digest");
     expect(text).toContain("Starter ruled out");
+    expect(text).toContain("ankle sprain");
     expect(text).toContain("Patrick Mahomes: Q → OUT (starter)");
     expect(html).toContain("Open news triage");
+    expect(html).toContain("ankle sprain");
     expect(html).toContain("https://example.com/leagues/league-1/news");
+  });
+});
+
+describe("relevant body chunks", () => {
+  it("prefers injury passages mentioning the matched player", async () => {
+    const { pickRelevantChunks } = await import("@/lib/news/relevant-chunks");
+    const body = [
+      "The Chiefs opened practice with light stretching and special teams work.",
+      "Patrick Mahomes was ruled out with a high-ankle sprain and is expected to miss at least one game.",
+      "Kansas City also signed a practice-squad tight end for depth.",
+    ].join("\n\n");
+    const excerpt = pickRelevantChunks(body, {
+      playerNames: ["Patrick Mahomes"],
+      maxChunks: 1,
+      maxChars: 200,
+    });
+    expect(excerpt.toLowerCase()).toContain("mahomes");
+    expect(excerpt.toLowerCase()).toMatch(/sprain|ruled out/);
+    expect(excerpt).not.toContain("practice-squad tight end");
   });
 });

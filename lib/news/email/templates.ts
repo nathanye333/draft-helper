@@ -101,16 +101,29 @@ export function formatDigestEmail(params: {
   leagueName: string;
   appUrl: string;
   leagueId: string;
-  items: Array<Pick<NewsItemView, "title" | "url" | "bucket" | "severity" | "source" | "matchedPlayers" | "score">>;
+  items: Array<
+    Pick<NewsItemView, "title" | "url" | "bucket" | "severity" | "source" | "matchedPlayers" | "score"> & {
+      /** Most relevant body/snippet excerpt for the email body. */
+      excerpt?: string;
+    }
+  >;
   injuryLines: string[];
 }): { subject: string; text: string; html: string } {
   const subject = `Daily fantasy news — ${params.leagueName}`;
   const top = params.items.slice(0, 12);
 
-  const textLines = top.map(
-    (i) =>
-      `• [${i.bucket}/${i.severity}] ${i.title}\n  ${i.matchedPlayers.map((p) => p.name).join(", ") || "—"}\n  ${i.url}`,
-  );
+  const textLines = top.map((i) => {
+    const players = i.matchedPlayers.map((p) => p.name).join(", ") || "—";
+    const excerpt = i.excerpt?.trim();
+    return [
+      `• [${i.bucket}/${i.severity}] ${i.title}`,
+      `  ${players}`,
+      excerpt ? `  ${excerpt}` : null,
+      `  ${i.url}`,
+    ]
+      .filter((l) => l != null)
+      .join("\n");
+  });
 
   const text = [
     `Daily news digest for ${params.leagueName}`,
@@ -127,8 +140,9 @@ export function formatDigestEmail(params: {
     .join("\n");
 
   const htmlItems = top
-    .map(
-      (i) => `<li style="margin-bottom:10px">
+    .map((i) => {
+      const excerpt = i.excerpt?.trim();
+      return `<li style="margin-bottom:10px">
   <a href="${escapeHtml(i.url)}">${escapeHtml(i.title)}</a><br/>
   <span style="color:#64748b">${escapeHtml(i.bucket)} · ${escapeHtml(i.severity)} · ${escapeHtml(i.source)}</span>
   ${
@@ -136,8 +150,13 @@ export function formatDigestEmail(params: {
       ? `<br/>Players: ${escapeHtml(i.matchedPlayers.map((p) => p.name).join(", "))}`
       : ""
   }
-</li>`,
-    )
+  ${
+    excerpt
+      ? `<br/><span style="color:#334155">${escapeHtml(excerpt)}</span>`
+      : ""
+  }
+</li>`;
+    })
     .join("\n");
 
   const injuryHtml =
