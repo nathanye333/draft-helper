@@ -149,6 +149,7 @@ export function NewsTriageBoard({ leagueId }: { leagueId: string }) {
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [chunksByHash, setChunksByHash] = useState<Map<string, RagChunk[]>>(new Map());
   const [chunksLoading, setChunksLoading] = useState(false);
+  const [chunksError, setChunksError] = useState<string | null>(null);
   const [summaryBusy, setSummaryBusy] = useState(false);
 
   useEffect(() => {
@@ -184,38 +185,74 @@ export function NewsTriageBoard({ leagueId }: { leagueId: string }) {
     void load(false);
   }, [load, leagueId]);
 
+  const loadSemanticChunks = useCallback(async (): Promise<boolean> => {
+    const res = await fetch(`/api/leagues/${leagueId}/news/rag`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        query: RAG_QUERY,
+        matchCount: 20,
+        matchThreshold: 0.2,
+      }),
+    });
+    if (!res.ok) {
+      const body = (await res.json().catch(() => ({}))) as { error?: unknown };
+      const msg =
+        typeof body.error === "string"
+          ? body.error
+          : body.error
+            ? "Chunk search failed (invalid request)"
+            : `Chunk search failed (HTTP ${res.status})`;
+      throw new Error(msg);
+    }
+    const json = (await res.json()) as { chunks?: RagChunk[] };
+    setChunksByHash(groupChunksByUrlHash(json.chunks ?? []));
+    setChunksError(null);
+    return (json.chunks?.length ?? 0) > 0;
+  }, [leagueId]);
+
   // Load semantically ranked body chunks for the feed (shown on cards + used in summary).
+  // Enrich/index runs async after refresh — retry so passages appear once bodies are embedded.
   useEffect(() => {
     if (!data?.feed.length) {
       setChunksByHash(new Map());
+      setChunksError(null);
       return;
     }
     let cancelled = false;
     setChunksLoading(true);
-    void (async () => {
+    setChunksError(null);
+
+    const run = async () => {
       try {
-        const res = await fetch(`/api/leagues/${leagueId}/news/rag`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            query: RAG_QUERY,
-            matchCount: 24,
-            matchThreshold: 0.2,
-          }),
-        });
-        if (!res.ok || cancelled) return;
-        const json = (await res.json()) as { chunks?: RagChunk[] };
-        if (!cancelled) setChunksByHash(groupChunksByUrlHash(json.chunks ?? []));
-      } catch {
-        if (!cancelled) setChunksByHash(new Map());
+        await loadSemanticChunks();
+      } catch (err) {
+        if (!cancelled) {
+          setChunksByHash(new Map());
+          setChunksError(err instanceof Error ? err.message : "Failed to load body chunks");
+        }
+        return false;
       } finally {
         if (!cancelled) setChunksLoading(false);
       }
-    })();
+      return true;
+    };
+
+    void run();
+
+    const retry1 = window.setTimeout(() => {
+      if (!cancelled) void loadSemanticChunks().catch(() => undefined);
+    }, 5000);
+    const retry2 = window.setTimeout(() => {
+      if (!cancelled) void loadSemanticChunks().catch(() => undefined);
+    }, 15000);
+
     return () => {
       cancelled = true;
+      window.clearTimeout(retry1);
+      window.clearTimeout(retry2);
     };
-  }, [data?.feed, leagueId]);
+  }, [data?.feed, data?.fetchedAt, leagueId, loadSemanticChunks]);
 
   const filteredFeed = useMemo(
     () =>
@@ -427,6 +464,8 @@ export function NewsTriageBoard({ leagueId }: { leagueId: string }) {
           <span className="text-xs text-slate-500">
             {chunksByHash.size} articles with semantic chunks
           </span>
+        ) : chunksError ? (
+          <span className="text-xs text-amber-500/90">{chunksError}</span>
         ) : null}
         {data?.cached ? (
           <span className="text-xs text-slate-500">Cached feed (10 min)</span>
@@ -507,6 +546,21 @@ export function NewsTriageBoard({ leagueId }: { leagueId: string }) {
                     </p>
                   );
                 })}
+                {(chunksByHash.get(item.id) ?? []).length === 0 && !chunksLoading
+                  ? (() => {
+                      const fallback = pickRelevantChunks(item.snippet, {
+                        playerNames: item.matchedPlayers.map((p) => p.name),
+                        maxChunks: 1,
+                        maxChars: 280,
+                      });
+                      if (!fallback) return null;
+                      return (
+                        <p className="mt-2 border-l-2 border-slate-700 pl-2 text-xs leading-relaxed text-slate-400">
+                          {fallback}
+                        </p>
+                      );
+                    })()
+                  : null}
                 <div className="mt-2 flex flex-wrap gap-2">
                   {item.matchedPlayers.map((p) => (
                     <PlayerLink key={p.espnPlayerId} leagueId={leagueId} espnPlayerId={p.espnPlayerId}>
