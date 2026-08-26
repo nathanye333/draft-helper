@@ -44,10 +44,11 @@ export function newsItemsToChunkRankInput(
 
 /** Rank stored (or fallback) body passages per feed item — no global semantic query. */
 export async function loadRankedFeedChunks(
-  supabase: SupabaseClient,
+  supabase: unknown,
   items: FeedItemForChunkRank[],
   opts: { maxChunksPerItem?: number; maxItems?: number } = {},
 ): Promise<FeedChunkResult[]> {
+  const db = supabase as SupabaseClient;
   const maxChunksPerItem = opts.maxChunksPerItem ?? 2;
   const maxItems = opts.maxItems ?? 48;
   if (items.length === 0) return [];
@@ -55,7 +56,7 @@ export async function loadRankedFeedChunks(
   const sorted = [...items].sort((a, b) => b.score - a.score).slice(0, maxItems);
   const hashes = sorted.map((i) => i.id);
 
-  const { data: itemRows, error: itemError } = await supabase
+  const { data: itemRows, error: itemError } = await db
     .from("news_items")
     .select("id, url_hash, title, snippet, source, published_at, body")
     .in("url_hash", hashes);
@@ -68,7 +69,7 @@ export async function loadRankedFeedChunks(
   const metaByHash = new Map(itemRows.map((r) => [String(r.url_hash), r]));
   const ids = [...idByHash.values()];
 
-  const { data: chunkRows } = await supabase
+  const { data: chunkRows } = await db
     .from("news_body_chunks")
     .select("news_item_id, chunk_index, content")
     .in("news_item_id", ids);
@@ -134,7 +135,7 @@ export async function loadRankedFeedChunks(
 
 /** Convenience for digest cron — accepts NewsItemView[]. */
 export async function excerptsByUrlHashFromFeed(
-  supabase: SupabaseClient,
+  supabase: unknown,
   items: NewsItemView[],
   opts: { maxChunksPerItem?: number; maxChars?: number } = {},
 ): Promise<Map<string, string>> {
@@ -182,7 +183,7 @@ export async function semanticExcerptsByUrlHash(
   opts: { maxChunksPerItem?: number; maxChars?: number } = {},
 ): Promise<Map<string, string>> {
   const { createAdminClient } = await import("@/lib/supabase/admin");
-  const supabase = createAdminClient() as unknown as SupabaseClient;
+  const supabase = createAdminClient();
   const feedItems: NewsItemView[] = items.map((item) => ({
     id: urlHash(item.url),
     title: item.title,
