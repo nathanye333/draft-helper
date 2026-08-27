@@ -327,6 +327,20 @@ export function NewsTriageBoard({ leagueId }: { leagueId: string }) {
       }
 
       if (feedChunks.length > 0) {
+        const topChunks = [...feedChunks]
+          .sort((a, b) => b.relevanceScore - a.relevanceScore)
+          .slice(0, 12)
+          .map((c) => {
+            const passage = (chunkPassage(c) || c.snippet || "").slice(0, 280).trim();
+            return {
+              title: c.title.slice(0, 120),
+              chunk: passage || undefined,
+              source: c.source,
+              publishedAt: c.publishedAt,
+              relevanceScore: Math.round(c.relevanceScore * 10) / 10,
+            };
+          });
+
         openSeasonAgent(
           leagueId,
           [
@@ -335,24 +349,14 @@ export function NewsTriageBoard({ leagueId }: { leagueId: string }) {
             "Use the provided chunk passages as primary evidence. Do not invent numbers. Use league tools if needed for roster/waiver context.",
             "",
             "Ranked body passages (per story, player/keyword scored):",
-            JSON.stringify(
-              feedChunks.map((c) => ({
-                title: c.title,
-                chunk: chunkPassage(c) || c.snippet?.slice(0, 400) || undefined,
-                source: c.source,
-                publishedAt: c.publishedAt,
-                relevanceScore: Math.round(c.relevanceScore * 10) / 10,
-              })),
-              null,
-              2,
-            ),
+            JSON.stringify(topChunks, null, 2),
           ].join("\n"),
         );
         return;
       }
 
-      const triaged = feed.map((item) => ({
-        title: item.title,
+      const triaged = feed.slice(0, 18).map((item) => ({
+        title: item.title.slice(0, 120),
         publishedAt: item.publishedAt,
         source: item.source,
         bucket: item.bucket,
@@ -360,7 +364,7 @@ export function NewsTriageBoard({ leagueId }: { leagueId: string }) {
         relevantSnippet: pickRelevantChunks(item.snippet, {
           playerNames: item.matchedPlayers.map((p) => p.name),
           maxChunks: 1,
-          maxChars: 220,
+          maxChars: 180,
         }),
       }));
 

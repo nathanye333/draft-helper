@@ -20,7 +20,8 @@ const chatBodySchema = z.object({
     .array(
       z.object({
         role: z.enum(["user", "assistant"]),
-        content: z.string().min(1).max(8000),
+        // News LLM summary can include many ranked passages; keep headroom.
+        content: z.string().min(1).max(32000),
       }),
     )
     .min(1)
