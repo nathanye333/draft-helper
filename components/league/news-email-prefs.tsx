@@ -35,6 +35,7 @@ export function NewsEmailPrefs({ leagueId }: { leagueId: string }) {
   const [saved, setSaved] = useState(false);
   const [sendStatus, setSendStatus] = useState<string | null>(null);
   const saveSeq = useRef(0);
+  const confirmedPrefs = useRef<Prefs | null>(null);
 
   const load = useCallback(async () => {
     setError(null);
@@ -42,6 +43,7 @@ export function NewsEmailPrefs({ leagueId }: { leagueId: string }) {
       const res = await fetch(`/api/leagues/${leagueId}/news/email-prefs`);
       if (!res.ok) throw new Error("Failed to load email prefs");
       const json = (await res.json()) as Prefs;
+      confirmedPrefs.current = json;
       setPrefs(json);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load prefs");
@@ -53,9 +55,9 @@ export function NewsEmailPrefs({ leagueId }: { leagueId: string }) {
   }, [load]);
 
   const persist = useCallback(
-    async (next: Prefs, opts?: { silent?: boolean }) => {
+    async (next: Prefs, opts?: { silent?: boolean; revertTo?: Prefs }) => {
       const seq = ++saveSeq.current;
-      if (!opts?.silent) setSaving(true);
+      setSaving(true);
       setError(null);
       if (!opts?.silent) setSaved(false);
       setSendStatus(null);
@@ -75,36 +77,37 @@ export function NewsEmailPrefs({ leagueId }: { leagueId: string }) {
         }
         const json = (await res.json()) as Omit<Prefs, "lastDigestSentAt" | "accountEmail" | "prefsSaved">;
         if (seq !== saveSeq.current) return;
-        setPrefs((prev) =>
-          prev
-            ? {
-                ...prev,
-                ...json,
-                prefsSaved: true,
-              }
-            : {
-                ...json,
-                lastDigestSentAt: null,
-                accountEmail: null,
-                prefsSaved: true,
-              },
-        );
+        const savedPrefs: Prefs = {
+          ...next,
+          ...json,
+          lastDigestSentAt: next.lastDigestSentAt,
+          accountEmail: next.accountEmail,
+          prefsSaved: true,
+        };
+        confirmedPrefs.current = savedPrefs;
+        setPrefs(savedPrefs);
         if (!opts?.silent) setSaved(true);
       } catch (err) {
         if (seq !== saveSeq.current) return;
+        if (opts?.revertTo) {
+          setPrefs(opts.revertTo);
+        } else if (confirmedPrefs.current) {
+          setPrefs(confirmedPrefs.current);
+        }
         setError(err instanceof Error ? err.message : "Failed to save");
       } finally {
-        if (seq === saveSeq.current && !opts?.silent) setSaving(false);
+        if (seq === saveSeq.current) setSaving(false);
       }
     },
     [leagueId],
   );
 
   const updatePref = (patch: Partial<Pick<Prefs, "digestEnabled" | "instantEnabled">>) => {
-    if (!prefs) return;
+    if (!prefs || saving) return;
+    const previous = prefs;
     const next = { ...prefs, ...patch };
     setPrefs(next);
-    void persist(next, { silent: true });
+    void persist(next, { silent: true, revertTo: previous });
   };
 
   const sendNow = async () => {
@@ -156,12 +159,17 @@ export function NewsEmailPrefs({ leagueId }: { leagueId: string }) {
           <span className="text-slate-300">{prefs.accountEmail ?? "your account email"}</span> around
           13:00 UTC (~9 AM ET). Instant alerts cover Reddit spikes and urgent ESPN injury jumps.
         </p>
-        {!prefs.prefsSaved && prefs.digestEnabled ? (
+        {saving ? (
           <p className="text-sm text-amber-400/90">Saving your preferences…</p>
         ) : null}
-        {prefs.prefsSaved && !prefs.digestEnabled ? (
+        {!saving && prefs.prefsSaved && !prefs.digestEnabled ? (
           <p className="text-sm text-amber-400/90">
             Daily digest is off — enable below to receive emails.
+          </p>
+        ) : null}
+        {!saving && !prefs.prefsSaved ? (
+          <p className="text-sm text-amber-400/90">
+            Turn on daily digest below to opt in — preferences save automatically.
           </p>
         ) : null}
         {digestActive ? (
@@ -198,7 +206,6 @@ export function NewsEmailPrefs({ leagueId }: { leagueId: string }) {
           >
             {sending ? "Sending…" : "Send digest now"}
           </Button>
-          {saving ? <span className="text-xs text-slate-500">Saving…</span> : null}
           {saved ? <span className="text-xs text-emerald-400">Saved</span> : null}
           {sendStatus ? <span className="text-xs text-emerald-400">{sendStatus}</span> : null}
           {error ? <span className="text-xs text-red-400">{error}</span> : null}

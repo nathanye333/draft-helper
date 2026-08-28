@@ -374,7 +374,18 @@ export async function runDailyDigestsForCurrentHour(now = new Date()): Promise<{
   errors: string[];
 }> {
   const hourUtc = now.getUTCHours();
-  const leagues = await listDigestEnabledLeagues();
+  let leagues: Awaited<ReturnType<typeof listDigestEnabledLeagues>>;
+  try {
+    leagues = await listDigestEnabledLeagues();
+  } catch (err) {
+    return {
+      hourUtc,
+      leagues: 0,
+      sent: 0,
+      skipped: 0,
+      errors: [err instanceof Error ? err.message : "Failed to list digest leagues"],
+    };
+  }
   let sent = 0;
   let skipped = 0;
   const errors: string[] = [];
