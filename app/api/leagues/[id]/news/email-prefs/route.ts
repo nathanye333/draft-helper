@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { createClient } from "@/lib/supabase/server";
+import { getLastDigestSentAt } from "@/lib/news/email/prefs";
 
 const bodySchema = z.object({
   digestEnabled: z.boolean(),
@@ -35,10 +36,15 @@ export async function GET(
     .eq("league_id", leagueId)
     .maybeSingle();
 
+  const lastDigestSentAt = await getLastDigestSentAt(leagueId);
+
   return NextResponse.json({
     digestEnabled: Boolean(data?.digest_enabled),
     instantEnabled: Boolean(data?.instant_enabled),
     digestHourUtc: data?.digest_hour_utc != null ? Number(data.digest_hour_utc) : 13,
+    lastDigestSentAt,
+    accountEmail: userData.user.email ?? null,
+    prefsSaved: Boolean(data),
   });
 }
 
