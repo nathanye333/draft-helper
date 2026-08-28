@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { runDailyDigestsForCurrentHour } from "@/lib/news/alerts";
+import { runDailyDigestsForCurrentHour, runInstantRedditSpikeScan } from "@/lib/news/alerts";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -11,12 +11,19 @@ function authorizeCron(request: Request): boolean {
   return auth === `Bearer ${secret}`;
 }
 
-/** Daily (Vercel Hobby ~13:00 UTC): send digests for all leagues with digest enabled. */
+/** Daily (~13:00 UTC): digests for all enabled leagues + Reddit spike scan. */
 export async function GET(request: Request) {
   if (!authorizeCron(request)) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    return NextResponse.json(
+      {
+        error: "Unauthorized",
+        hint: "Set CRON_SECRET in Vercel project env (Vercel sends Authorization: Bearer <CRON_SECRET>).",
+      },
+      { status: 401 },
+    );
   }
 
-  const result = await runDailyDigestsForCurrentHour();
-  return NextResponse.json({ ok: true, ...result });
+  const digest = await runDailyDigestsForCurrentHour();
+  const reddit = await runInstantRedditSpikeScan();
+  return NextResponse.json({ ok: true, digest, reddit });
 }

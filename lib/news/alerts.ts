@@ -168,16 +168,20 @@ export async function sendRedditSpikeAlertsForLeague(
       leagueId,
       posts: [post],
     });
-    const claimed = await claimAlertSend({
+    const claim = await claimAlertSend({
       leagueId,
       userId,
       kind: "reddit_spike",
       fingerprint,
       subject,
     });
-    if (!claimed) {
+    if (claim === "duplicate") {
       skipped += 1;
       continue;
+    }
+    if (claim !== "claimed") {
+      console.warn("[reddit spike email]", claim.error);
+      return { sent, skipped, error: claim.error };
     }
     const result = await sendEmail({ to: email, subject, text, html });
     if (!result.ok) {
@@ -262,14 +266,14 @@ export async function maybeSendInjuryDeltaAlerts(params: {
         },
       ],
     });
-    const claimed = await claimAlertSend({
+    const claim = await claimAlertSend({
       leagueId: params.leagueId,
       userId: prefs.userId,
       kind: "injury_delta",
       fingerprint,
       subject,
     });
-    if (!claimed) continue;
+    if (claim !== "claimed") continue;
     const result = await sendEmail({ to: email, subject, text, html });
     if (result.ok) sent += 1;
     else {
@@ -336,14 +340,15 @@ export async function sendDigestForLeague(params: {
     injuryLines,
   });
 
-  const claimed = await claimAlertSend({
+  const claim = await claimAlertSend({
     leagueId: params.leagueId,
     userId: params.userId,
     kind: "digest",
     fingerprint,
     subject,
   });
-  if (!claimed) return { sent: false, skipped: true };
+  if (claim === "duplicate") return { sent: false, skipped: true };
+  if (claim !== "claimed") return { sent: false, error: claim.error };
 
   const result = await sendEmail({ to: email, subject, text, html });
   if (result.ok) return { sent: true };

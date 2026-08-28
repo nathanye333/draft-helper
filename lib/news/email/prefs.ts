@@ -58,14 +58,14 @@ export async function listDigestEnabledLeagues(): Promise<NewsEmailPrefs[]> {
   }));
 }
 
-/** Returns true if this fingerprint is new (row inserted); false if already sent. */
+/** Returns whether a send slot was claimed, already sent today, or failed to claim. */
 export async function claimAlertSend(params: {
   leagueId: string;
   userId: string;
   kind: NewsAlertKind;
   fingerprint: string;
   subject: string;
-}): Promise<boolean> {
+}): Promise<"claimed" | "duplicate" | { error: string }> {
   const supabase = createAdminClient();
   const { error } = await supabase.from("news_alert_sends").insert({
     league_id: params.leagueId,
@@ -74,11 +74,10 @@ export async function claimAlertSend(params: {
     fingerprint: params.fingerprint,
     subject: params.subject,
   });
-  if (!error) return true;
-  // unique violation → already emailed
-  if (error.code === "23505") return false;
+  if (!error) return "claimed";
+  if (error.code === "23505") return "duplicate";
   console.warn("[claimAlertSend]", error.message);
-  return false;
+  return { error: error.message };
 }
 
 /** Drop a claim so a failed send can be retried (e.g. missing Resend key). */
@@ -95,6 +94,19 @@ export async function releaseAlertSend(params: {
     .eq("kind", params.kind)
     .eq("fingerprint", params.fingerprint);
   if (error) console.warn("[releaseAlertSend]", error.message);
+}
+
+export async function getLastDigestSentAt(leagueId: string): Promise<string | null> {
+  const supabase = createAdminClient();
+  const { data } = await supabase
+    .from("news_alert_sends")
+    .select("sent_at")
+    .eq("league_id", leagueId)
+    .eq("kind", "digest")
+    .order("sent_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  return data?.sent_at ? String(data.sent_at) : null;
 }
 
 export async function resolveUserEmail(userId: string): Promise<string | null> {
