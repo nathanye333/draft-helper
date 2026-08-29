@@ -4,11 +4,14 @@ import { detectRedditSpikesForPlayers } from "@/lib/news/reddit-spikes";
 import {
   claimAlertSend,
   getLeagueEmailPrefs,
+  hasAlertSend,
   listDigestEnabledLeagues,
   listInstantEnabledLeagues,
+  recordAlertSend,
   releaseAlertSend,
   resolveUserEmail,
 } from "@/lib/news/email/prefs";
+import { invalidateNewsCache } from "@/lib/news/cache";
 import { sendEmail } from "@/lib/news/email/resend";
 import {
   formatDigestEmail,
@@ -54,9 +57,13 @@ async function leagueName(leagueId: string): Promise<string> {
   return data?.name ? String(data.name) : "Your league";
 }
 
+/** Wall-clock budget for optional digest enrichment, well under the cron maxDuration. */
+const ENRICHMENT_BUDGET_MS = 45_000;
+
 /** Load stored article bodies by url_hash; fetch a few missing ones for digest quality. */
 async function resolveBodiesForDigest(
   items: NewsItemView[],
+  deadline = Number.POSITIVE_INFINITY,
 ): Promise<Map<string, string>> {
   const bodies = new Map<string, string>();
   if (items.length === 0) return bodies;
@@ -94,6 +101,7 @@ async function resolveBodiesForDigest(
 
   // Best-effort fetch for items still thin (cap to keep cron under maxDuration).
   for (const item of missing.slice(0, 8)) {
+    if (Date.now() > deadline) break;
     const hash = urlHash(item.url);
     if ((bodies.get(hash)?.length ?? 0) >= 200) continue;
     const fetched = sanitizeArticleText(await fetchArticleBody(item.url));
@@ -122,10 +130,15 @@ async function withExcerpts(
   items: NewsItemView[],
   bodies: Map<string, string>,
 ): Promise<Array<NewsItemView & { excerpt: string }>> {
-  const semantic = await semanticExcerptsByUrlHash(items, {
-    maxChunksPerItem: 2,
-    maxChars: 360,
-  });
+  let semantic = new Map<string, string>();
+  try {
+    semantic = await semanticExcerptsByUrlHash(items, {
+      maxChunksPerItem: 2,
+      maxChars: 360,
+    });
+  } catch (err) {
+    console.warn("[digest excerpts]", err instanceof Error ? err.message : err);
+  }
 
   return items.map((item) => {
     const hash = urlHash(item.url);
@@ -138,6 +151,30 @@ async function withExcerpts(
       );
     return { ...item, excerpt };
   });
+}
+
+/**
+ * Article bodies and semantic excerpts only improve digest wording, so a failure
+ * here must never stop the email — fall back to snippet-based excerpts.
+ */
+async function buildDigestExcerpts(
+  items: NewsItemView[],
+): Promise<Array<NewsItemView & { excerpt: string }>> {
+  const deadline = Date.now() + ENRICHMENT_BUDGET_MS;
+  try {
+    const bodies = await resolveBodiesForDigest(items, deadline);
+    return await withExcerpts(items, bodies);
+  } catch (err) {
+    console.warn("[digest enrichment]", err instanceof Error ? err.message : err);
+    return items.map((item) => ({
+      ...item,
+      excerpt: keywordExcerptFallback(
+        item.snippet || "",
+        item.matchedPlayers.map((p) => p.name),
+        360,
+      ),
+    }));
+  }
 }
 
 export async function sendRedditSpikeAlertsForLeague(
@@ -291,7 +328,11 @@ export async function maybeSendInjuryDeltaAlerts(params: {
 
 /**
  * Send a news digest email for one league.
- * Cron uses daily fingerprint dedupe; manual sends use force to bypass it.
+ *
+ * The daily cron and the "Send digest now" button run this exact same path; the
+ * only difference is that a manual send skips the once-per-day dedupe check.
+ * Dedupe is a read before building plus a write after Resend accepts the email,
+ * so a crashed or timed-out run can always be retried on the next tick.
  */
 export async function sendDigestForLeague(params: {
   leagueId: string;
@@ -305,8 +346,20 @@ export async function sendDigestForLeague(params: {
     ? `digest:manual:${day}:${now.getTime()}`
     : `digest:${day}`;
 
+  if (!params.force) {
+    const alreadySent = await hasAlertSend({
+      leagueId: params.leagueId,
+      kind: "digest",
+      fingerprint,
+    });
+    if (alreadySent) return { sent: false, skipped: true };
+  }
+
   const email = await resolveUserEmail(params.userId);
   if (!email) return { sent: false, error: "no email" };
+
+  // Refresh news first so the digest reflects the latest feed, not a cached one.
+  invalidateNewsCache(params.leagueId);
 
   const name = await leagueName(params.leagueId);
   const scope = await loadRosterScopeAdmin(params.leagueId, params.userId);
@@ -318,8 +371,7 @@ export async function sendDigestForLeague(params: {
     .filter((i) => i.bucket === "needs_action" || i.bucket === "monitor" || i.score >= 4)
     .slice(0, 15);
 
-  const bodies = await resolveBodiesForDigest(items);
-  const itemsWithExcerpts = await withExcerpts(items, bodies);
+  const itemsWithExcerpts = await buildDigestExcerpts(items);
 
   const injuryBoard = scope ? buildInjuryBoard(scope.players, scope.injuryDeltas) : [];
   const injuryLines = injuryBoard
@@ -340,25 +392,17 @@ export async function sendDigestForLeague(params: {
     injuryLines,
   });
 
-  const claim = await claimAlertSend({
+  const result = await sendEmail({ to: email, subject, text, html });
+  if (!result.ok) return { sent: false, error: result.error };
+
+  await recordAlertSend({
     leagueId: params.leagueId,
     userId: params.userId,
     kind: "digest",
     fingerprint,
     subject,
   });
-  if (claim === "duplicate") return { sent: false, skipped: true };
-  if (claim !== "claimed") return { sent: false, error: claim.error };
-
-  const result = await sendEmail({ to: email, subject, text, html });
-  if (result.ok) return { sent: true };
-
-  await releaseAlertSend({
-    leagueId: params.leagueId,
-    kind: "digest",
-    fingerprint,
-  });
-  return { sent: false, error: result.error };
+  return { sent: true };
 }
 
 /**

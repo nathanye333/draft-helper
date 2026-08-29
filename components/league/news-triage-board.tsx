@@ -81,6 +81,9 @@ function openSeasonAgent(leagueId: string, prompt: string) {
   );
 }
 
+/** Keep in sync with the feed-chunks route cap. */
+const MAX_CHUNK_RANK_ITEMS = 250;
+
 function groupChunksByUrlHash(chunks: FeedChunk[]): Map<string, FeedChunk[]> {
   const map = new Map<string, FeedChunk[]>();
   for (const c of chunks) {
@@ -192,13 +195,13 @@ export function NewsTriageBoard({ leagueId }: { leagueId: string }) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          items: feed.map((item) => ({
+          items: feed.slice(0, MAX_CHUNK_RANK_ITEMS).map((item) => ({
             id: item.id,
-            title: item.title,
-            snippet: item.snippet,
-            score: item.score,
-            bucket: item.bucket,
-            matchedPlayers: item.matchedPlayers,
+            title: item.title ?? "",
+            snippet: item.snippet ?? "",
+            score: item.score ?? 0,
+            bucket: item.bucket ?? "fyi",
+            matchedPlayers: item.matchedPlayers ?? [],
           })),
           maxChunksPerItem: 2,
         }),

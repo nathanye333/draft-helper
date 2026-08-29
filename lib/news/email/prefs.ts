@@ -83,6 +83,55 @@ export async function claimAlertSend(params: {
   return { error: error.message };
 }
 
+/**
+ * Has this exact alert already been emailed?
+ * Checked before building a digest so a repeat cron tick stays cheap, and so a
+ * crashed run never leaves a claim that blocks the rest of the day.
+ */
+export async function hasAlertSend(params: {
+  leagueId: string;
+  kind: NewsAlertKind;
+  fingerprint: string;
+}): Promise<boolean> {
+  const supabase = createAdminClient();
+  const { data, error } = await supabase
+    .from("news_alert_sends")
+    .select("id")
+    .eq("league_id", params.leagueId)
+    .eq("kind", params.kind)
+    .eq("fingerprint", params.fingerprint)
+    .maybeSingle();
+  if (error) {
+    console.warn("[hasAlertSend]", error.message);
+    return false;
+  }
+  return Boolean(data);
+}
+
+/**
+ * Record a send *after* the email is accepted by the provider.
+ * The unique constraint still guards against concurrent double-sends.
+ */
+export async function recordAlertSend(params: {
+  leagueId: string;
+  userId: string;
+  kind: NewsAlertKind;
+  fingerprint: string;
+  subject: string;
+}): Promise<void> {
+  const supabase = createAdminClient();
+  const { error } = await supabase.from("news_alert_sends").insert({
+    league_id: params.leagueId,
+    user_id: params.userId,
+    kind: params.kind,
+    fingerprint: params.fingerprint,
+    subject: params.subject,
+  });
+  if (error && error.code !== "23505") {
+    console.warn("[recordAlertSend]", error.message);
+  }
+}
+
 /** Drop a claim so a failed send can be retried (e.g. missing Resend key). */
 export async function releaseAlertSend(params: {
   leagueId: string;
