@@ -5,6 +5,11 @@ import {
   type FeedItemForChunkRank,
 } from "@/lib/news/chunk-ranking";
 import type { NewsItemView } from "@/lib/news/types";
+import {
+  EXCERPT_CHUNKS_PER_ITEM,
+  EXCERPT_JOINER,
+  FEED_EXCERPT_MAX_CHARS,
+} from "@/lib/news/excerpt-limits";
 
 export interface FeedChunkResult {
   urlHash: string;
@@ -49,7 +54,7 @@ export async function loadRankedFeedChunks(
   opts: { maxChunksPerItem?: number; maxItems?: number } = {},
 ): Promise<FeedChunkResult[]> {
   const db = supabase as SupabaseClient;
-  const maxChunksPerItem = opts.maxChunksPerItem ?? 2;
+  const maxChunksPerItem = opts.maxChunksPerItem ?? EXCERPT_CHUNKS_PER_ITEM;
   const maxItems = opts.maxItems ?? 48;
   if (items.length === 0) return [];
 
@@ -139,11 +144,11 @@ export async function excerptsByUrlHashFromFeed(
   items: NewsItemView[],
   opts: { maxChunksPerItem?: number; maxChars?: number } = {},
 ): Promise<Map<string, string>> {
-  const maxChars = opts.maxChars ?? 360;
+  const maxChars = opts.maxChars ?? FEED_EXCERPT_MAX_CHARS;
   const ranked = await loadRankedFeedChunks(
     supabase,
     newsItemsToChunkRankInput(items),
-    { maxChunksPerItem: opts.maxChunksPerItem ?? 2 },
+    { maxChunksPerItem: opts.maxChunksPerItem ?? EXCERPT_CHUNKS_PER_ITEM },
   );
 
   const byHash = new Map<string, string[]>();
@@ -158,18 +163,53 @@ export async function excerptsByUrlHashFromFeed(
     const hash = urlHash(item.url);
     const pieces = byHash.get(item.id) ?? byHash.get(hash) ?? [];
     if (pieces.length === 0) continue;
-    let excerpt = "";
-    for (const piece of pieces) {
-      const next = excerpt ? `${excerpt} … ${piece}` : piece;
-      if (next.length > maxChars) {
-        if (!excerpt) excerpt = piece.slice(0, maxChars).trim();
-        break;
-      }
-      excerpt = next;
-    }
-    if (excerpt) out.set(hash, excerpt.trim());
+    const excerpt = joinExcerptPieces(pieces, maxChars);
+    if (excerpt) out.set(hash, excerpt);
   }
   return out;
+}
+
+/**
+ * Join ranked passages up to a char budget. A passage that would overflow is
+ * truncated at a sentence boundary rather than dropped, so the budget is
+ * actually used instead of stopping early on one long paragraph.
+ */
+export function joinExcerptPieces(pieces: string[], maxChars: number): string {
+  let excerpt = "";
+  for (const piece of pieces) {
+    const trimmed = piece.trim();
+    if (!trimmed) continue;
+
+    const candidate = excerpt ? `${excerpt}${EXCERPT_JOINER}${trimmed}` : trimmed;
+    if (candidate.length <= maxChars) {
+      excerpt = candidate;
+      continue;
+    }
+
+    const remaining = maxChars - (excerpt ? excerpt.length + EXCERPT_JOINER.length : 0);
+    if (remaining < 120) break;
+
+    const clipped = clipToSentence(trimmed, remaining);
+    if (!clipped) break;
+    excerpt = excerpt ? `${excerpt}${EXCERPT_JOINER}${clipped}` : clipped;
+    break;
+  }
+  return excerpt.trim();
+}
+
+/** Trim to the last sentence end within the budget, else the last word break. */
+function clipToSentence(text: string, maxChars: number): string {
+  if (text.length <= maxChars) return text;
+  const window = text.slice(0, maxChars);
+  const sentenceEnd = Math.max(
+    window.lastIndexOf(". "),
+    window.lastIndexOf("! "),
+    window.lastIndexOf("? "),
+  );
+  if (sentenceEnd >= maxChars * 0.5) return window.slice(0, sentenceEnd + 1).trim();
+  const wordEnd = window.lastIndexOf(" ");
+  if (wordEnd >= maxChars * 0.5) return `${window.slice(0, wordEnd).trim()}…`;
+  return `${window.trim()}…`;
 }
 
 /** Digest/cron path — admin client with loose typing to avoid deep Supabase generics. */

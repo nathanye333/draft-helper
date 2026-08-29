@@ -9,7 +9,7 @@ import { urlHash } from "@/lib/news/dedupe";
 import type { NewsItemView } from "@/lib/news/types";
 
 const CHUNK_TARGET_CHARS = 320;
-const MAX_CHUNKS_PER_ARTICLE = 12;
+const MAX_CHUNKS_PER_ARTICLE = 24;
 
 export interface BodyChunkForEmbed {
   chunkIndex: number;

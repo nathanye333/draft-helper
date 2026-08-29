@@ -8,6 +8,11 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select } from "@/components/ui/select";
 import { sourceLabel } from "@/lib/news/rank";
 import { pickRelevantChunks } from "@/lib/news/relevant-chunks";
+import {
+  EXCERPT_CHUNKS_PER_ITEM,
+  FEED_EXCERPT_MAX_CHARS,
+  MAX_RENDERED_CHUNKS_PER_ITEM,
+} from "@/lib/news/excerpt-limits";
 import type {
   NewsBucket,
   NewsItemView,
@@ -68,8 +73,8 @@ function chunkPassage(c: FeedChunk): string {
   const passage = c.content?.trim() || "";
   if (passage) return passage;
   return pickRelevantChunks(c.body || c.snippet, {
-    maxChunks: 2,
-    maxChars: 420,
+    maxChunks: EXCERPT_CHUNKS_PER_ITEM,
+    maxChars: FEED_EXCERPT_MAX_CHARS,
   });
 }
 
@@ -90,7 +95,7 @@ function groupChunksByUrlHash(chunks: FeedChunk[]): Map<string, FeedChunk[]> {
     const key = c.urlHash?.trim();
     if (!key) continue;
     const list = map.get(key) ?? [];
-    if (list.length >= 2) continue;
+    if (list.length >= MAX_RENDERED_CHUNKS_PER_ITEM) continue;
     list.push(c);
     map.set(key, list);
   }
@@ -203,7 +208,7 @@ export function NewsTriageBoard({ leagueId }: { leagueId: string }) {
             bucket: item.bucket ?? "fyi",
             matchedPlayers: item.matchedPlayers ?? [],
           })),
-          maxChunksPerItem: 2,
+          maxChunksPerItem: EXCERPT_CHUNKS_PER_ITEM,
         }),
       });
       if (!res.ok) {
@@ -554,8 +559,8 @@ export function NewsTriageBoard({ leagueId }: { leagueId: string }) {
                   ? (() => {
                       const fallback = pickRelevantChunks(item.snippet, {
                         playerNames: item.matchedPlayers.map((p) => p.name),
-                        maxChunks: 1,
-                        maxChars: 280,
+                        maxChunks: EXCERPT_CHUNKS_PER_ITEM,
+                        maxChars: FEED_EXCERPT_MAX_CHARS,
                       });
                       if (!fallback) return null;
                       return (

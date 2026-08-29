@@ -22,6 +22,10 @@ import { buildNewsFeedForPlayers } from "@/lib/news/aggregate";
 import { buildInjuryBoard } from "@/lib/news/injury-board";
 import { isStarterSlot } from "@/lib/league/slot-order";
 import { urlHash } from "@/lib/news/dedupe";
+import {
+  DIGEST_EXCERPT_MAX_CHARS,
+  EXCERPT_CHUNKS_PER_ITEM,
+} from "@/lib/news/excerpt-limits";
 import { fetchArticleBody, sanitizeArticleText } from "@/lib/news/article-body";
 import {
   indexBodyChunks,
@@ -60,6 +64,12 @@ async function leagueName(leagueId: string): Promise<string> {
 /** Wall-clock budget for optional digest enrichment, well under the cron maxDuration. */
 const ENRICHMENT_BUDGET_MS = 45_000;
 
+/** Below this, a stored body cannot fill the excerpt budget — re-fetch the article. */
+const THIN_BODY_CHARS = DIGEST_EXCERPT_MAX_CHARS * 2;
+
+/** Article fetches per digest; the deadline above is the real safety net. */
+const MAX_BODY_FETCHES = 14;
+
 /** Load stored article bodies by url_hash; fetch a few missing ones for digest quality. */
 async function resolveBodiesForDigest(
   items: NewsItemView[],
@@ -92,18 +102,22 @@ async function resolveBodiesForDigest(
     const storedBody = sanitizeArticleText(stored?.body);
     if (storedBody) {
       bodies.set(hash, storedBody);
-      continue;
+      // A stored body shorter than the excerpt budget still leaves the digest
+      // thin, so queue it for a full re-fetch.
+      if (storedBody.length >= THIN_BODY_CHARS) continue;
+    } else {
+      const fallback =
+        sanitizeArticleText(stored?.snippet) || sanitizeArticleText(item.snippet) || "";
+      if (fallback) bodies.set(hash, fallback);
     }
-    const fallback = sanitizeArticleText(stored?.snippet) || sanitizeArticleText(item.snippet) || "";
-    if (fallback) bodies.set(hash, fallback);
     missing.push(item);
   }
 
   // Best-effort fetch for items still thin (cap to keep cron under maxDuration).
-  for (const item of missing.slice(0, 8)) {
+  for (const item of missing.slice(0, MAX_BODY_FETCHES)) {
     if (Date.now() > deadline) break;
     const hash = urlHash(item.url);
-    if ((bodies.get(hash)?.length ?? 0) >= 200) continue;
+    if ((bodies.get(hash)?.length ?? 0) >= THIN_BODY_CHARS) continue;
     const fetched = sanitizeArticleText(await fetchArticleBody(item.url));
     if (!fetched) continue;
     bodies.set(hash, fetched);
@@ -133,8 +147,8 @@ async function withExcerpts(
   let semantic = new Map<string, string>();
   try {
     semantic = await semanticExcerptsByUrlHash(items, {
-      maxChunksPerItem: 2,
-      maxChars: 360,
+      maxChunksPerItem: EXCERPT_CHUNKS_PER_ITEM,
+      maxChars: DIGEST_EXCERPT_MAX_CHARS,
     });
   } catch (err) {
     console.warn("[digest excerpts]", err instanceof Error ? err.message : err);
@@ -147,7 +161,7 @@ async function withExcerpts(
       keywordExcerptFallback(
         bodies.get(hash) || item.snippet || "",
         item.matchedPlayers.map((p) => p.name),
-        360,
+        DIGEST_EXCERPT_MAX_CHARS,
       );
     return { ...item, excerpt };
   });
@@ -171,7 +185,7 @@ async function buildDigestExcerpts(
       excerpt: keywordExcerptFallback(
         item.snippet || "",
         item.matchedPlayers.map((p) => p.name),
-        360,
+        DIGEST_EXCERPT_MAX_CHARS,
       ),
     }));
   }

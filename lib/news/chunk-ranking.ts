@@ -6,6 +6,7 @@
 
 import type { MatchedPlayerRef, NewsBucket } from "@/lib/news/types";
 import { pickRelevantChunks, scoreChunk } from "@/lib/news/relevant-chunks";
+import { EXCERPT_CHUNKS_PER_ITEM, FEED_EXCERPT_MAX_CHARS } from "@/lib/news/excerpt-limits";
 
 export interface FeedItemForChunkRank {
   id: string;
@@ -108,7 +109,7 @@ export function rankChunksForFeedItem(
   item: FeedItemForChunkRank,
   opts: { maxChunks?: number; minScore?: number } = {},
 ): RankedChunk[] {
-  const maxChunks = opts.maxChunks ?? 2;
+  const maxChunks = opts.maxChunks ?? EXCERPT_CHUNKS_PER_ITEM;
   const minScore = opts.minScore ?? 4;
 
   const ranked = chunks
@@ -120,15 +121,32 @@ export function rankChunksForFeedItem(
     .filter((c) => c.content.length >= 40 && !isBoilerplateChunk(c.content))
     .sort((a, b) => b.score - a.score || a.chunkIndex - b.chunkIndex);
 
-  const picked = ranked.filter((c) => c.score >= minScore).slice(0, maxChunks);
-  if (picked.length > 0) return picked;
+  const strong = ranked.filter((c) => c.score >= minScore).slice(0, maxChunks);
+
+  // Most articles only have one or two passages that clear minScore. Top up with
+  // the next-best non-boilerplate passages so excerpts stay substantive instead
+  // of collapsing to a single sentence.
+  if (strong.length < maxChunks) {
+    const chosen = new Set(strong.map((c) => c.chunkIndex));
+    for (const candidate of ranked) {
+      if (strong.length >= maxChunks) break;
+      if (chosen.has(candidate.chunkIndex)) continue;
+      strong.push(candidate);
+      chosen.add(candidate.chunkIndex);
+    }
+  }
+
+  // Read in article order so multi-passage excerpts stay coherent.
+  if (strong.length > 0) {
+    return strong.sort((a, b) => a.chunkIndex - b.chunkIndex);
+  }
 
   const fallback = pickRelevantChunks(
     chunks.map((c) => c.content).join("\n\n") || item.snippet,
     {
       playerNames: item.matchedPlayers.map((p) => p.name),
-      maxChunks: 1,
-      maxChars: 360,
+      maxChunks,
+      maxChars: FEED_EXCERPT_MAX_CHARS,
     },
   );
   if (fallback && !isBoilerplateChunk(fallback)) {

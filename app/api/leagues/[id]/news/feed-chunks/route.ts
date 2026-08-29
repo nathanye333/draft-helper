@@ -2,6 +2,10 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { createClient } from "@/lib/supabase/server";
 import { loadRankedFeedChunks } from "@/lib/news/feed-chunks";
+import {
+  EXCERPT_CHUNKS_PER_ITEM,
+  MAX_EXCERPT_CHUNKS_PER_ITEM,
+} from "@/lib/news/excerpt-limits";
 import type { MatchedPlayerRef, NewsBucket } from "@/lib/news/types";
 
 const itemSchema = z.object({
@@ -26,7 +30,12 @@ const MAX_ITEMS = 250;
 
 const bodySchema = z.object({
   items: z.array(itemSchema).min(1).max(MAX_ITEMS),
-  maxChunksPerItem: z.number().int().min(1).max(3).default(2),
+  maxChunksPerItem: z
+    .number()
+    .int()
+    .min(1)
+    .max(MAX_EXCERPT_CHUNKS_PER_ITEM)
+    .default(EXCERPT_CHUNKS_PER_ITEM),
 });
 
 export async function POST(

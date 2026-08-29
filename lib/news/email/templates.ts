@@ -1,5 +1,14 @@
 import type { NewsItemView } from "@/lib/news/types";
 import type { RedditSpikePost } from "@/lib/news/reddit-spikes";
+import { EXCERPT_JOINER } from "@/lib/news/excerpt-limits";
+
+/** Split a multi-passage excerpt back into its individual passages. */
+export function excerptParagraphs(excerpt: string): string[] {
+  return excerpt
+    .split(EXCERPT_JOINER.trim())
+    .map((p) => p.trim())
+    .filter(Boolean);
+}
 
 export function escapeHtml(s: string): string {
   return s
@@ -118,7 +127,7 @@ export function formatDigestEmail(params: {
     return [
       `• [${i.bucket}/${i.severity}] ${i.title}`,
       `  ${players}`,
-      excerpt ? `  ${excerpt}` : null,
+      ...(excerpt ? excerptParagraphs(excerpt).map((p) => `  ${p}`) : []),
       `  ${i.url}`,
     ]
       .filter((l) => l != null)
@@ -142,7 +151,15 @@ export function formatDigestEmail(params: {
   const htmlItems = top
     .map((i) => {
       const excerpt = i.excerpt?.trim();
-      return `<li style="margin-bottom:10px">
+      const excerptHtml = excerpt
+        ? excerptParagraphs(excerpt)
+            .map(
+              (p) =>
+                `<p style="margin:6px 0 0;color:#334155;line-height:1.5">${escapeHtml(p)}</p>`,
+            )
+            .join("")
+        : "";
+      return `<li style="margin-bottom:18px">
   <a href="${escapeHtml(i.url)}">${escapeHtml(i.title)}</a><br/>
   <span style="color:#64748b">${escapeHtml(i.bucket)} · ${escapeHtml(i.severity)} · ${escapeHtml(i.source)}</span>
   ${
@@ -151,8 +168,8 @@ export function formatDigestEmail(params: {
       : ""
   }
   ${
-    excerpt
-      ? `<br/><span style="color:#334155">${escapeHtml(excerpt)}</span>`
+    excerptHtml
+      ? `<blockquote style="margin:8px 0 0;padding:0 0 0 12px;border-left:3px solid #cbd5e1">${excerptHtml}</blockquote>`
       : ""
   }
 </li>`;

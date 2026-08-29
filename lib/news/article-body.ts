@@ -8,7 +8,8 @@
 const USER_AGENT =
   "FantasyDraftHelper/0.1 (+https://github.com; draft-agent news lookup; not a scraper bot)";
 
-const MAX_BODY_CHARS = 6_000;
+/** Generous so multi-passage excerpts have real article text to draw from. */
+const MAX_BODY_CHARS = 14_000;
 const FETCH_TIMEOUT_MS = 8_000;
 
 /** Known aggregator meta descriptions that are not article content. */
