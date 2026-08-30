@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { sendDigestForLeague } from "@/lib/news/alerts";
+import { DIGEST_LOOKBACK_HOURS } from "@/lib/news/digest-window";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -38,7 +39,16 @@ export async function POST(
       return NextResponse.json({ ok: true, sent: true });
     }
     if ("skipped" in result && result.skipped) {
-      return NextResponse.json({ ok: true, sent: false, skipped: true });
+      return NextResponse.json({
+        ok: true,
+        sent: false,
+        skipped: true,
+        reason: result.reason,
+        message:
+          result.reason === "no_recent_news"
+            ? `No new articles in the last ${DIGEST_LOOKBACK_HOURS} hours.`
+            : "Today's digest was already sent.",
+      });
     }
     return NextResponse.json(
       { error: "error" in result ? result.error : "Send failed" },

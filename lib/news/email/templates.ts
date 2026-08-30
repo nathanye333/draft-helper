@@ -2,6 +2,17 @@ import type { NewsItemView } from "@/lib/news/types";
 import type { RedditSpikePost } from "@/lib/news/reddit-spikes";
 import { EXCERPT_JOINER } from "@/lib/news/excerpt-limits";
 
+/** "last 24 hours" / "last 36 hours" copy for the digest window. */
+export function formatLookbackLabel(lookbackHours?: number): string {
+  const hours = lookbackHours && lookbackHours > 0 ? Math.round(lookbackHours) : 24;
+  if (hours === 24) return "last 24 hours";
+  if (hours % 24 === 0) {
+    const days = hours / 24;
+    return `last ${days} day${days === 1 ? "" : "s"}`;
+  }
+  return `last ${hours} hours`;
+}
+
 /** Split a multi-passage excerpt back into its individual passages. */
 export function excerptParagraphs(excerpt: string): string[] {
   return excerpt
@@ -117,9 +128,12 @@ export function formatDigestEmail(params: {
     }
   >;
   injuryLines: string[];
+  /** Window the articles were drawn from, used for the "last N hours" copy. */
+  lookbackHours?: number;
 }): { subject: string; text: string; html: string } {
   const subject = `Daily fantasy news — ${params.leagueName}`;
   const top = params.items.slice(0, 12);
+  const windowLabel = formatLookbackLabel(params.lookbackHours);
 
   const textLines = top.map((i) => {
     const players = i.matchedPlayers.map((p) => p.name).join(", ") || "—";
@@ -140,8 +154,8 @@ export function formatDigestEmail(params: {
     params.injuryLines.length ? "Injury board changes:" : null,
     ...params.injuryLines.map((l) => `• ${l}`),
     params.injuryLines.length ? "" : null,
-    "Top stories:",
-    ...textLines,
+    `Top stories (${windowLabel}):`,
+    ...(textLines.length > 0 ? textLines : [`• No new articles in the ${windowLabel}.`]),
     "",
     `Open news triage: ${params.appUrl}/leagues/${params.leagueId}/news`,
   ]
@@ -186,8 +200,11 @@ export function formatDigestEmail(params: {
   const html = `<div style="font-family:system-ui,sans-serif;line-height:1.45;color:#0f172a">
   <h2 style="margin:0 0 8px">Daily news — ${escapeHtml(params.leagueName)}</h2>
   ${injuryHtml}
-  <h3 style="margin:16px 0 8px">Top stories</h3>
-  <ul style="padding-left:18px">${htmlItems || "<li>No matching news in the last day.</li>"}</ul>
+  <h3 style="margin:16px 0 4px">Top stories</h3>
+  <p style="margin:0 0 8px;color:#64748b;font-size:13px">Published in the ${escapeHtml(windowLabel)}.</p>
+  <ul style="padding-left:18px">${
+    htmlItems || `<li>No new articles in the ${escapeHtml(windowLabel)}.</li>`
+  }</ul>
   <p><a href="${escapeHtml(params.appUrl)}/leagues/${params.leagueId}/news">Open news triage</a></p>
 </div>`;
 

@@ -26,6 +26,7 @@ import {
   DIGEST_EXCERPT_MAX_CHARS,
   EXCERPT_CHUNKS_PER_ITEM,
 } from "@/lib/news/excerpt-limits";
+import { DIGEST_LOOKBACK_HOURS, filterToDigestWindow } from "@/lib/news/digest-window";
 import { fetchArticleBody, sanitizeArticleText } from "@/lib/news/article-body";
 import {
   indexBodyChunks,
@@ -340,6 +341,13 @@ export async function maybeSendInjuryDeltaAlerts(params: {
   return { sent };
 }
 
+export type DigestSkipReason = "already_sent" | "no_recent_news";
+
+export type DigestSendResult =
+  | { sent: true }
+  | { sent: false; skipped: true; reason: DigestSkipReason }
+  | { sent: false; error: string };
+
 /**
  * Send a news digest email for one league.
  *
@@ -353,7 +361,7 @@ export async function sendDigestForLeague(params: {
   userId: string;
   now?: Date;
   force?: boolean;
-}): Promise<{ sent: true } | { sent: false; skipped: true } | { sent: false; error: string }> {
+}): Promise<DigestSendResult> {
   const now = params.now ?? new Date();
   const day = now.toISOString().slice(0, 10);
   const fingerprint = params.force
@@ -366,7 +374,7 @@ export async function sendDigestForLeague(params: {
       kind: "digest",
       fingerprint,
     });
-    if (alreadySent) return { sent: false, skipped: true };
+    if (alreadySent) return { sent: false, skipped: true, reason: "already_sent" };
   }
 
   const email = await resolveUserEmail(params.userId);
@@ -381,11 +389,11 @@ export async function sendDigestForLeague(params: {
     ? await buildNewsFeedForPlayers(scope.players, scope.playersById)
     : [];
 
-  const items = feed
+  // A daily digest should only carry today's news, even though the page feed
+  // keeps a longer history.
+  const items = filterToDigestWindow(feed, now)
     .filter((i) => i.bucket === "needs_action" || i.bucket === "monitor" || i.score >= 4)
     .slice(0, 15);
-
-  const itemsWithExcerpts = await buildDigestExcerpts(items);
 
   const injuryBoard = scope ? buildInjuryBoard(scope.players, scope.injuryDeltas) : [];
   const injuryLines = injuryBoard
@@ -398,12 +406,21 @@ export async function sendDigestForLeague(params: {
         }`,
     );
 
+  // Nothing published in the window and no injury movement — skip rather than
+  // emailing an empty digest. Not recorded, so a later run can still send.
+  if (items.length === 0 && injuryLines.length === 0) {
+    return { sent: false, skipped: true, reason: "no_recent_news" };
+  }
+
+  const itemsWithExcerpts = await buildDigestExcerpts(items);
+
   const { subject, text, html } = formatDigestEmail({
     leagueName: name,
     appUrl: appBaseUrl(),
     leagueId: params.leagueId,
     items: itemsWithExcerpts,
     injuryLines,
+    lookbackHours: DIGEST_LOOKBACK_HOURS,
   });
 
   const result = await sendEmail({ to: email, subject, text, html });
@@ -426,9 +443,12 @@ export async function sendDigestForLeague(params: {
  */
 export async function runDailyDigestsForCurrentHour(now = new Date()): Promise<{
   hourUtc: number;
+  lookbackHours: number;
   leagues: number;
   sent: number;
   skipped: number;
+  alreadySent: number;
+  noRecentNews: number;
   errors: string[];
 }> {
   const hourUtc = now.getUTCHours();
@@ -438,14 +458,18 @@ export async function runDailyDigestsForCurrentHour(now = new Date()): Promise<{
   } catch (err) {
     return {
       hourUtc,
+      lookbackHours: DIGEST_LOOKBACK_HOURS,
       leagues: 0,
       sent: 0,
       skipped: 0,
+      alreadySent: 0,
+      noRecentNews: 0,
       errors: [err instanceof Error ? err.message : "Failed to list digest leagues"],
     };
   }
   let sent = 0;
-  let skipped = 0;
+  let alreadySent = 0;
+  let noRecentNews = 0;
   const errors: string[] = [];
 
   for (const prefs of leagues) {
@@ -456,8 +480,10 @@ export async function runDailyDigestsForCurrentHour(now = new Date()): Promise<{
         now,
       });
       if (result.sent) sent += 1;
-      else if ("skipped" in result && result.skipped) skipped += 1;
-      else if ("error" in result && result.error) {
+      else if ("skipped" in result && result.skipped) {
+        if (result.reason === "already_sent") alreadySent += 1;
+        else noRecentNews += 1;
+      } else if ("error" in result && result.error) {
         errors.push(`${prefs.leagueId}: ${result.error}`);
       }
     } catch (err) {
@@ -467,5 +493,14 @@ export async function runDailyDigestsForCurrentHour(now = new Date()): Promise<{
     }
   }
 
-  return { hourUtc, leagues: leagues.length, sent, skipped, errors };
+  return {
+    hourUtc,
+    lookbackHours: DIGEST_LOOKBACK_HOURS,
+    leagues: leagues.length,
+    sent,
+    skipped: alreadySent + noRecentNews,
+    alreadySent,
+    noRecentNews,
+    errors,
+  };
 }

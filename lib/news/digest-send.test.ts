@@ -56,20 +56,22 @@ vi.mock("@/lib/supabase/admin", () => ({
   }),
 }));
 
-const feedItem = {
-  id: "hash-1",
-  title: "Star RB questionable",
-  url: "https://example.com/rb",
-  snippet: "He is questionable for Sunday.",
-  source: "espn",
-  severity: "questionable",
-  bucket: "needs_action",
-  score: 20,
-  publishedAt: null,
-  matchedPlayers: [{ espnPlayerId: 1, name: "Star RB", scope: "roster" }],
-  corroborationCount: 1,
-  triageStatus: "new",
-};
+function recentFeedItem(publishedAt: string | null = new Date().toISOString()) {
+  return {
+    id: "hash-1",
+    title: "Star RB questionable",
+    url: "https://example.com/rb",
+    snippet: "He is questionable for Sunday.",
+    source: "espn",
+    severity: "questionable",
+    bucket: "needs_action",
+    score: 20,
+    publishedAt,
+    matchedPlayers: [{ espnPlayerId: 1, name: "Star RB", scope: "roster" }],
+    corroborationCount: 1,
+    triageStatus: "new",
+  };
+}
 
 describe("sendDigestForLeague", () => {
   beforeEach(async () => {
@@ -83,7 +85,7 @@ describe("sendDigestForLeague", () => {
       playersById: new Map(),
       injuryDeltas: [],
     });
-    mocks.buildNewsFeedForPlayers.mockResolvedValue([feedItem]);
+    mocks.buildNewsFeedForPlayers.mockResolvedValue([recentFeedItem()]);
     mocks.semanticExcerptsByUrlHash.mockResolvedValue(new Map());
     mocks.supabaseIn.mockResolvedValue({ data: [] });
   });
@@ -120,9 +122,76 @@ describe("sendDigestForLeague", () => {
     const { sendDigestForLeague } = await import("./alerts");
     const result = await sendDigestForLeague({ leagueId: "l1", userId: "u1" });
 
-    expect(result).toEqual({ sent: false, skipped: true });
+    expect(result).toEqual({ sent: false, skipped: true, reason: "already_sent" });
     expect(mocks.sendEmail).not.toHaveBeenCalled();
     expect(mocks.buildNewsFeedForPlayers).not.toHaveBeenCalled();
+  });
+
+  it("only includes articles published within the last day", async () => {
+    mocks.buildNewsFeedForPlayers.mockResolvedValue([
+      recentFeedItem(new Date().toISOString()),
+      {
+        ...recentFeedItem(new Date(Date.now() - 5 * 24 * 3600_000).toISOString()),
+        id: "hash-old",
+        url: "https://example.com/old",
+        title: "Five day old story",
+      },
+    ]);
+
+    const { sendDigestForLeague } = await import("./alerts");
+    const result = await sendDigestForLeague({ leagueId: "l1", userId: "u1" });
+
+    expect(result).toEqual({ sent: true });
+    const body = mocks.sendEmail.mock.calls[0]![0] as { text: string };
+    expect(body.text).toContain("Star RB questionable");
+    expect(body.text).not.toContain("Five day old story");
+  });
+
+  it("skips sending when nothing was published in the window", async () => {
+    mocks.buildNewsFeedForPlayers.mockResolvedValue([
+      recentFeedItem(new Date(Date.now() - 3 * 24 * 3600_000).toISOString()),
+    ]);
+
+    const { sendDigestForLeague } = await import("./alerts");
+    const result = await sendDigestForLeague({ leagueId: "l1", userId: "u1" });
+
+    expect(result).toEqual({ sent: false, skipped: true, reason: "no_recent_news" });
+    expect(mocks.sendEmail).not.toHaveBeenCalled();
+    expect(mocks.recordAlertSend).not.toHaveBeenCalled();
+  });
+
+  it("still sends undated-article-only days when injuries moved", async () => {
+    mocks.buildNewsFeedForPlayers.mockResolvedValue([recentFeedItem(null)]);
+    mocks.loadRosterScopeAdmin.mockResolvedValue({
+      players: [
+        {
+          espnPlayerId: 1,
+          name: "Star RB",
+          scope: "roster",
+          lineupSlot: "RB",
+          isStarter: true,
+          injuryStatus: "OUT",
+          position: "RB",
+          nflTeam: "KC",
+          headshotUrl: null,
+        },
+      ],
+      playersById: new Map(),
+      injuryDeltas: [
+        {
+          espnPlayerId: 1,
+          playerName: "Star RB",
+          fromStatus: "QUESTIONABLE",
+          toStatus: "OUT",
+          detectedAt: new Date().toISOString(),
+        },
+      ],
+    });
+
+    const { sendDigestForLeague } = await import("./alerts");
+    const result = await sendDigestForLeague({ leagueId: "l1", userId: "u1" });
+
+    expect(result).toEqual({ sent: true });
   });
 
   it("force send ignores the daily dedupe check", async () => {

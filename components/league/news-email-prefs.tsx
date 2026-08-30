@@ -33,7 +33,7 @@ export function NewsEmailPrefs({ leagueId }: { leagueId: string }) {
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
-  const [sendStatus, setSendStatus] = useState<string | null>(null);
+  const [sendStatus, setSendStatus] = useState<{ sent: boolean; message: string } | null>(null);
   const saveSeq = useRef(0);
   const confirmedPrefs = useRef<Prefs | null>(null);
 
@@ -122,12 +122,19 @@ export function NewsEmailPrefs({ leagueId }: { leagueId: string }) {
       const json = (await res.json().catch(() => null)) as {
         ok?: boolean;
         sent?: boolean;
+        skipped?: boolean;
+        message?: string;
         error?: string;
       } | null;
       if (!res.ok) {
         throw new Error(json?.error ?? "Failed to send digest");
       }
-      setSendStatus("Digest emailed to your account address.");
+      setSendStatus({
+        sent: Boolean(json?.sent),
+        message: json?.sent
+          ? "Digest emailed to your account address."
+          : (json?.message ?? "Nothing new to send right now."),
+      });
       void load();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to send digest");
@@ -157,7 +164,8 @@ export function NewsEmailPrefs({ leagueId }: { leagueId: string }) {
         <p className="text-sm text-slate-400">
           Daily digest to{" "}
           <span className="text-slate-300">{prefs.accountEmail ?? "your account email"}</span> around
-          13:00 UTC (~9 AM ET). Instant alerts cover Reddit spikes and urgent ESPN injury jumps.
+          13:00 UTC (~9 AM ET), covering articles published in the last 24 hours. Instant alerts
+          cover Reddit spikes and urgent ESPN injury jumps.
         </p>
         {saving ? (
           <p className="text-sm text-amber-400/90">Saving your preferences…</p>
@@ -207,7 +215,13 @@ export function NewsEmailPrefs({ leagueId }: { leagueId: string }) {
             {sending ? "Sending…" : "Send digest now"}
           </Button>
           {saved ? <span className="text-xs text-emerald-400">Saved</span> : null}
-          {sendStatus ? <span className="text-xs text-emerald-400">{sendStatus}</span> : null}
+          {sendStatus ? (
+            <span
+              className={`text-xs ${sendStatus.sent ? "text-emerald-400" : "text-slate-400"}`}
+            >
+              {sendStatus.message}
+            </span>
+          ) : null}
           {error ? <span className="text-xs text-red-400">{error}</span> : null}
         </div>
       </CardContent>
