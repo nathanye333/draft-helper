@@ -9,6 +9,7 @@ import { loadRosterScope } from "@/lib/news/roster-scope";
 import { bucketForSeverity, classifySeverity, isTopStoryHeadline, scoreNewsItem } from "@/lib/news/rank";
 import type {
   NewsFeedFilter,
+  NewsFetchStats,
   NewsItemView,
   NewsTriageResponse,
   RawNewsHit,
@@ -17,6 +18,62 @@ import type {
 
 const MAX_CONCURRENT = 5;
 const NEWS_LOOKBACK_DAYS = 30;
+const STALE_FEED_HOURS = 72;
+
+interface FetchAccumulator {
+  googleNewsHits: number;
+  bingHits: number;
+  redditHits: number;
+  topStoryHits: number;
+  sourceErrors: number;
+}
+
+function emptyAccumulator(): FetchAccumulator {
+  return {
+    googleNewsHits: 0,
+    bingHits: 0,
+    redditHits: 0,
+    topStoryHits: 0,
+    sourceErrors: 0,
+  };
+}
+
+function newestPublishedAt(items: NewsItemView[]): string | null {
+  let newest: number | null = null;
+  for (const item of items) {
+    if (!item.publishedAt) continue;
+    const ms = Date.parse(item.publishedAt);
+    if (Number.isNaN(ms)) continue;
+    if (newest == null || ms > newest) newest = ms;
+  }
+  return newest != null ? new Date(newest).toISOString() : null;
+}
+
+function buildProviderNotes(params: {
+  playerCount: number;
+  feed: NewsItemView[];
+  stats: NewsFetchStats;
+}): string | undefined {
+  if (params.playerCount === 0) {
+    return "Connect and sync your ESPN league to populate roster news.";
+  }
+  if (params.stats.rawTotal === 0) {
+    return "News providers returned no results — try Refresh in a minute. RSS feeds may be temporarily blocked from the server.";
+  }
+  if (params.feed.length === 0) {
+    return "Fetched articles but none matched your roster players. Try widening filters or adding watchlist players.";
+  }
+  const newestMs = params.stats.newestPublishedAt
+    ? Date.parse(params.stats.newestPublishedAt)
+    : Number.NaN;
+  if (!Number.isNaN(newestMs)) {
+    const ageHours = (Date.now() - newestMs) / (1000 * 60 * 60);
+    if (ageHours > STALE_FEED_HOURS) {
+      return `Newest matched article is ${Math.round(ageHours)}h old. Click Refresh news — Google/Bing/Reddit may have been temporarily unavailable.`;
+    }
+  }
+  return undefined;
+}
 
 async function mapPool<T, R>(
   items: T[],
@@ -62,6 +119,7 @@ export function isRecentHit(hit: { publishedAt: string | null }): boolean {
 async function fetchPlayerNews(
   players: RosterPlayerForNews[],
   signal?: AbortSignal,
+  acc: FetchAccumulator = emptyAccumulator(),
 ): Promise<RawNewsHit[]> {
   const rosterPlayers = players.filter((p) => p.scope === "roster" || p.scope === "watchlist");
   const targets = rosterPlayers.slice(0, 12);
@@ -70,6 +128,7 @@ async function fetchPlayerNews(
     const query = buildRecentNewsQuery(normalizeSearchQuery(buildPlayerQuery(player)));
     try {
       const google = await searchGoogleNewsRss(query, 4, "google-news", signal);
+      acc.googleNewsHits += google.length;
       return google.map((r) => ({
         title: r.title,
         url: r.url,
@@ -77,7 +136,9 @@ async function fetchPlayerNews(
         source: r.source,
         publishedAt: r.publishedAt,
       }));
-    } catch {
+    } catch (err) {
+      acc.sourceErrors += 1;
+      console.warn("[news] google player query failed:", err instanceof Error ? err.message : err);
       return [] as RawNewsHit[];
     }
   });
@@ -86,6 +147,7 @@ async function fetchPlayerNews(
     const query = buildRecentNewsQuery(normalizeSearchQuery(buildEspnQuery(player)));
     try {
       const google = await searchGoogleNewsRss(query, 3, "espn", signal);
+      acc.googleNewsHits += google.length;
       return google.map((r) => ({
         title: r.title,
         url: r.url,
@@ -93,7 +155,9 @@ async function fetchPlayerNews(
         source: "espn" as const,
         publishedAt: r.publishedAt,
       }));
-    } catch {
+    } catch (err) {
+      acc.sourceErrors += 1;
+      console.warn("[news] google espn query failed:", err instanceof Error ? err.message : err);
       return [] as RawNewsHit[];
     }
   });
@@ -107,6 +171,7 @@ async function fetchPlayerNews(
     const query = buildRecentNewsQuery(normalizeSearchQuery(`${names} NFL injury`));
     try {
       const bing = await searchBingNewsRss(query, 8, signal);
+      acc.bingHits += bing.length;
       bingBatch = bing.map((r) => ({
         title: r.title,
         url: r.url,
@@ -114,13 +179,23 @@ async function fetchPlayerNews(
         source: r.source,
         publishedAt: r.publishedAt,
       }));
-    } catch {
+    } catch (err) {
+      acc.sourceErrors += 1;
+      console.warn("[news] bing query failed:", err instanceof Error ? err.message : err);
       bingBatch = [];
     }
   }
 
-  const reddit = await fetchRedditFeeds({ maxPerSub: 12, signal, injuryFlairOnly: false });
-  const topStories = await fetchTopStories(signal);
+  let reddit: RawNewsHit[] = [];
+  try {
+    reddit = await fetchRedditFeeds({ maxPerSub: 12, signal, injuryFlairOnly: false });
+    acc.redditHits += reddit.length;
+  } catch (err) {
+    acc.sourceErrors += 1;
+    console.warn("[news] reddit fetch failed:", err instanceof Error ? err.message : err);
+  }
+
+  const topStories = await fetchTopStories(signal, acc);
 
   return [
     ...generalQueries.flat(),
@@ -131,7 +206,7 @@ async function fetchPlayerNews(
   ].filter(isRecentHit);
 }
 
-async function fetchTopStories(signal?: AbortSignal): Promise<RawNewsHit[]> {
+async function fetchTopStories(signal?: AbortSignal, acc?: FetchAccumulator): Promise<RawNewsHit[]> {
   const queries = [
     "NFL injury OR inactive OR IR OR questionable",
     "NFL fantasy trade OR traded OR acquired",
@@ -143,6 +218,7 @@ async function fetchTopStories(signal?: AbortSignal): Promise<RawNewsHit[]> {
     const query = buildRecentNewsQuery(normalizeSearchQuery(raw));
     try {
       const google = await searchGoogleNewsRss(query, 8, "google-news", signal);
+      if (acc) acc.googleNewsHits += google.length;
       return google.map((r) => ({
         title: r.title,
         url: r.url,
@@ -150,12 +226,18 @@ async function fetchTopStories(signal?: AbortSignal): Promise<RawNewsHit[]> {
         source: r.source,
         publishedAt: r.publishedAt,
       }));
-    } catch {
+    } catch (err) {
+      if (acc) acc.sourceErrors += 1;
+      console.warn("[news] google top-story query failed:", err instanceof Error ? err.message : err);
       return [] as RawNewsHit[];
     }
   });
 
-  return batches.flat().filter((hit) => isTopStoryHeadline(`${hit.title} ${hit.snippet}`));
+  return batches.flat().filter((hit) => {
+    if (!isTopStoryHeadline(`${hit.title} ${hit.snippet}`)) return false;
+    if (acc) acc.topStoryHits += 1;
+    return true;
+  });
 }
 
 /** Build a scored news feed for a player scope without persisting (cron-safe). */
@@ -163,8 +245,9 @@ export async function buildNewsFeedForPlayers(
   players: RosterPlayerForNews[],
   playersById: Map<number, RosterPlayerForNews>,
   signal?: AbortSignal,
-): Promise<NewsItemView[]> {
-  const rawHits = await fetchPlayerNews(players, signal);
+  acc: FetchAccumulator = emptyAccumulator(),
+): Promise<{ feed: NewsItemView[]; stats: NewsFetchStats }> {
+  const rawHits = await fetchPlayerNews(players, signal, acc);
   const deduped = dedupeRawHits(rawHits);
   const corroboration = corroborationCounts(rawHits);
   const matchIndex = buildPlayerMatchIndex(players);
@@ -202,7 +285,19 @@ export async function buildNewsFeedForPlayers(
     });
   }
   feed.sort((a, b) => b.score - a.score);
-  return feed;
+
+  const stats: NewsFetchStats = {
+    googleNewsHits: acc.googleNewsHits,
+    bingHits: acc.bingHits,
+    redditHits: acc.redditHits,
+    topStoryHits: acc.topStoryHits,
+    rawTotal: rawHits.length,
+    feedTotal: feed.length,
+    sourceErrors: acc.sourceErrors,
+    newestPublishedAt: newestPublishedAt(feed),
+  };
+
+  return { feed, stats };
 }
 
 function applyFilters(feed: NewsItemView[], filter?: NewsFeedFilter): NewsItemView[] {
@@ -272,7 +367,7 @@ export async function aggregateLeagueNews(params: {
     throw new Error("League not found");
   }
 
-  const feed = await buildNewsFeedForPlayers(scope.players, scope.playersById, params.signal);
+  const { feed, stats } = await buildNewsFeedForPlayers(scope.players, scope.playersById, params.signal);
 
   let enrichedFeed = feed;
   try {
@@ -297,10 +392,12 @@ export async function aggregateLeagueNews(params: {
     lastSyncedAt: scope.lastSyncedAt,
     injuryBoard,
     feed: applyFilters(sorted, params.filter),
-    providerNotes:
-      scope.players.length === 0
-        ? "Connect and sync your ESPN league to populate roster news."
-        : undefined,
+    fetchStats: stats,
+    providerNotes: buildProviderNotes({
+      playerCount: scope.players.length,
+      feed: enrichedFeed,
+      stats,
+    }),
   };
 
   setCachedNews(params.leagueId, { ...response, feed: enrichedFeed });

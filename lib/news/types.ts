@@ -85,6 +85,19 @@ export interface NewsTriageResponse {
   injuryBoard: InjuryBoardPlayer[];
   feed: NewsItemView[];
   providerNotes?: string;
+  /** Populated on refresh — helps diagnose empty/stale feeds. */
+  fetchStats?: NewsFetchStats;
+}
+
+export interface NewsFetchStats {
+  googleNewsHits: number;
+  bingHits: number;
+  redditHits: number;
+  topStoryHits: number;
+  rawTotal: number;
+  feedTotal: number;
+  sourceErrors: number;
+  newestPublishedAt: string | null;
 }
 
 export interface NewsFeedFilter {

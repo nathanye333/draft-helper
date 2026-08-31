@@ -385,9 +385,9 @@ export async function sendDigestForLeague(params: {
 
   const name = await leagueName(params.leagueId);
   const scope = await loadRosterScopeAdmin(params.leagueId, params.userId);
-  const feed = scope
+  const { feed } = scope
     ? await buildNewsFeedForPlayers(scope.players, scope.playersById)
-    : [];
+    : { feed: [] as Awaited<ReturnType<typeof buildNewsFeedForPlayers>>["feed"] };
 
   // A daily digest should only carry today's news, even though the page feed
   // keeps a longer history.

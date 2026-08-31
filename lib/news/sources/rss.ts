@@ -9,7 +9,7 @@ export interface RssSearchResult {
 }
 
 const USER_AGENT =
-  "FantasyDraftHelper/0.1 (+https://github.com; draft-agent news lookup; not a scraper bot)";
+  "Mozilla/5.0 (compatible; FantasyDraftHelper/0.1; +https://github.com/nathanye333/draft-helper)";
 
 export function normalizeSearchQuery(raw: string): string {
   return raw
@@ -48,54 +48,90 @@ function parseRssDate(raw: string): string | null {
   return Number.isNaN(parsed) ? null : new Date(parsed).toISOString();
 }
 
-/** Parse RSS/Atom-ish item blocks into search results. Exported for unit tests. */
+/** Split RSS 2.0 <item> and Atom <entry> blocks from a feed document. */
+export function extractFeedBlocks(xml: string): string[] {
+  const blocks: string[] = [];
+  for (const pattern of [/<item\b[\s\S]*?<\/item>/gi, /<entry\b[\s\S]*?<\/entry>/gi]) {
+    let match: RegExpExecArray | null;
+    while ((match = pattern.exec(xml)) !== null) {
+      blocks.push(match[0]);
+    }
+  }
+  return blocks;
+}
+
+/** Prefer Atom alternate links; skip feed/self/rss endpoints. */
+function extractFeedUrl(block: string): string {
+  const alternate =
+    block.match(/<link\b[^>]*\brel=["']alternate["'][^>]*\bhref=["']([^"']+)["']/i)?.[1] ??
+    block.match(/<link\b[^>]*\bhref=["']([^"']+)["'][^>]*\brel=["']alternate["']/i)?.[1];
+  if (alternate?.trim()) return alternate.trim();
+
+  for (const match of block.matchAll(/<link\b[^>]*\bhref=["']([^"']+)["'][^>]*>/gi)) {
+    const href = match[1]?.trim() ?? "";
+    if (!href) continue;
+    if (/\.rss(?:\?|$)/i.test(href)) continue;
+    if (/redditstatic\.com/i.test(href)) continue;
+    return href;
+  }
+
+  return decodeXmlEntities(
+    firstMatch(block, [
+      /<link[^>]*>([\s\S]*?)<\/link>/i,
+      /<guid[^>]*>([\s\S]*?)<\/guid>/i,
+      /<id[^>]*>([\s\S]*?)<\/id>/i,
+    ]),
+  );
+}
+
+function cleanSnippet(snippet: string): string {
+  const cleaned = snippet
+    .replace(/comprehensive up-to-date news coverage[\s\S]*?google news\.?/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (/aggregated from sources all over the world/i.test(cleaned)) return "";
+  return cleaned.slice(0, 800);
+}
+
+/** Parse one RSS <item> or Atom <entry> block. */
+export function parseFeedBlock(block: string, source: NewsSource): RssSearchResult | null {
+  const title = decodeXmlEntities(firstMatch(block, [/<title[^>]*>([\s\S]*?)<\/title>/i]));
+  const url = extractFeedUrl(block);
+  const snippet = decodeXmlEntities(
+    firstMatch(block, [
+      /<description[^>]*>([\s\S]*?)<\/description>/i,
+      /<summary[^>]*>([\s\S]*?)<\/summary>/i,
+      /<content[^>]*>([\s\S]*?)<\/content>/i,
+    ]),
+  );
+  const pubDate = decodeXmlEntities(
+    firstMatch(block, [
+      /<pubDate[^>]*>([\s\S]*?)<\/pubDate>/i,
+      /<published[^>]*>([\s\S]*?)<\/published>/i,
+      /<updated[^>]*>([\s\S]*?)<\/updated>/i,
+    ]),
+  );
+  if (!title || !url) return null;
+  return {
+    title,
+    url,
+    snippet: cleanSnippet(snippet),
+    source,
+    publishedAt: parseRssDate(pubDate),
+  };
+}
+
+/** Parse RSS 2.0 and Atom feeds (Google/Bing RSS, Reddit Atom). */
 export function parseRssItems(
   xml: string,
   source: NewsSource,
   limit: number,
 ): RssSearchResult[] {
   const items: RssSearchResult[] = [];
-  const itemRegex = /<item\b[\s\S]*?<\/item>/gi;
-  let match: RegExpExecArray | null;
-  while ((match = itemRegex.exec(xml)) !== null && items.length < limit) {
-    const block = match[0];
-    const title = decodeXmlEntities(
-      firstMatch(block, [/<title[^>]*>([\s\S]*?)<\/title>/i]),
-    );
-    const url = decodeXmlEntities(
-      firstMatch(block, [
-        /<link[^>]*href=["']([^"']+)["']/i,
-        /<link[^>]*>([\s\S]*?)<\/link>/i,
-        /<guid[^>]*>([\s\S]*?)<\/guid>/i,
-      ]),
-    );
-    const snippet = decodeXmlEntities(
-      firstMatch(block, [
-        /<description[^>]*>([\s\S]*?)<\/description>/i,
-        /<summary[^>]*>([\s\S]*?)<\/summary>/i,
-      ]),
-    );
-    const pubDate = decodeXmlEntities(
-      firstMatch(block, [
-        /<pubDate[^>]*>([\s\S]*?)<\/pubDate>/i,
-        /<published[^>]*>([\s\S]*?)<\/published>/i,
-        /<updated[^>]*>([\s\S]*?)<\/updated>/i,
-      ]),
-    );
-    if (!title || !url) continue;
-    // Google News often ships a generic site slogan or title+outlet HTML — not article text.
-    const cleanedSnippet = snippet
-      .replace(/comprehensive up-to-date news coverage[\s\S]*?google news\.?/gi, " ")
-      .replace(/\s+/g, " ")
-      .trim();
-    const looksLikeSlogan = /aggregated from sources all over the world/i.test(cleanedSnippet);
-    items.push({
-      title,
-      url,
-      snippet: looksLikeSlogan ? "" : cleanedSnippet.slice(0, 800),
-      source,
-      publishedAt: parseRssDate(pubDate),
-    });
+  for (const block of extractFeedBlocks(xml)) {
+    if (items.length >= limit) break;
+    const parsed = parseFeedBlock(block, source);
+    if (parsed) items.push(parsed);
   }
   return items;
 }
@@ -104,7 +140,8 @@ export async function fetchRssText(url: string, init?: RequestInit): Promise<str
   const res = await fetch(url, {
     ...init,
     headers: {
-      Accept: "application/rss+xml, application/xml, application/json, text/xml, */*",
+      Accept:
+        "application/rss+xml, application/atom+xml, application/xml, application/json, text/xml, */*",
       "User-Agent": USER_AGENT,
       ...(init?.headers ?? {}),
     },

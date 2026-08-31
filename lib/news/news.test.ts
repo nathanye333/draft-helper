@@ -133,6 +133,41 @@ describe("top-story headlines", () => {
   });
 });
 
+describe("RSS / Atom feed parsing", () => {
+  it("parses Reddit Atom entries (not just RSS <item>)", async () => {
+    const { parseRssItems } = await import("@/lib/news/sources/rss");
+    const atom = `<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <entry>
+    <title>Josh Jacobs out indefinitely</title>
+    <link href="https://www.reddit.com/r/fantasyfootball/comments/abc/josh_jacobs/" />
+    <published>2026-08-31T22:33:23+00:00</published>
+    <content type="html">Packers RB ruled out.</content>
+  </entry>
+</feed>`;
+    const items = parseRssItems(atom, "reddit", 5);
+    expect(items).toHaveLength(1);
+    expect(items[0]?.title).toContain("Josh Jacobs");
+    expect(items[0]?.url).toContain("reddit.com");
+    expect(items[0]?.publishedAt).toBe("2026-08-31T22:33:23.000Z");
+  });
+
+  it("still parses classic RSS items", async () => {
+    const { parseRssItems } = await import("@/lib/news/sources/rss");
+    const rss = `<?xml version="1.0"?><rss><channel>
+      <item>
+        <title>Star RB ruled out</title>
+        <link>https://example.com/out</link>
+        <pubDate>Sun, 31 Aug 2026 12:00:00 GMT</pubDate>
+        <description>Coach confirms.</description>
+      </item>
+    </channel></rss>`;
+    const items = parseRssItems(rss, "google-news", 5);
+    expect(items).toHaveLength(1);
+    expect(items[0]?.title).toBe("Star RB ruled out");
+  });
+});
+
 describe("news recency filter", () => {
   it("drops items older than 30 days", () => {
     const recent = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();

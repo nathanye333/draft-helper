@@ -85,7 +85,7 @@ describe("sendDigestForLeague", () => {
       playersById: new Map(),
       injuryDeltas: [],
     });
-    mocks.buildNewsFeedForPlayers.mockResolvedValue([recentFeedItem()]);
+    mocks.buildNewsFeedForPlayers.mockResolvedValue({ feed: [recentFeedItem()] });
     mocks.semanticExcerptsByUrlHash.mockResolvedValue(new Map());
     mocks.supabaseIn.mockResolvedValue({ data: [] });
   });
@@ -128,15 +128,17 @@ describe("sendDigestForLeague", () => {
   });
 
   it("only includes articles published within the last day", async () => {
-    mocks.buildNewsFeedForPlayers.mockResolvedValue([
-      recentFeedItem(new Date().toISOString()),
-      {
-        ...recentFeedItem(new Date(Date.now() - 5 * 24 * 3600_000).toISOString()),
-        id: "hash-old",
-        url: "https://example.com/old",
-        title: "Five day old story",
-      },
-    ]);
+    mocks.buildNewsFeedForPlayers.mockResolvedValue({
+      feed: [
+        recentFeedItem(new Date().toISOString()),
+        {
+          ...recentFeedItem(new Date(Date.now() - 5 * 24 * 3600_000).toISOString()),
+          id: "hash-old",
+          url: "https://example.com/old",
+          title: "Five day old story",
+        },
+      ],
+    });
 
     const { sendDigestForLeague } = await import("./alerts");
     const result = await sendDigestForLeague({ leagueId: "l1", userId: "u1" });
@@ -148,9 +150,9 @@ describe("sendDigestForLeague", () => {
   });
 
   it("skips sending when nothing was published in the window", async () => {
-    mocks.buildNewsFeedForPlayers.mockResolvedValue([
-      recentFeedItem(new Date(Date.now() - 3 * 24 * 3600_000).toISOString()),
-    ]);
+    mocks.buildNewsFeedForPlayers.mockResolvedValue({
+      feed: [recentFeedItem(new Date(Date.now() - 3 * 24 * 3600_000).toISOString())],
+    });
 
     const { sendDigestForLeague } = await import("./alerts");
     const result = await sendDigestForLeague({ leagueId: "l1", userId: "u1" });
@@ -161,7 +163,7 @@ describe("sendDigestForLeague", () => {
   });
 
   it("still sends undated-article-only days when injuries moved", async () => {
-    mocks.buildNewsFeedForPlayers.mockResolvedValue([recentFeedItem(null)]);
+    mocks.buildNewsFeedForPlayers.mockResolvedValue({ feed: [recentFeedItem(null)] });
     mocks.loadRosterScopeAdmin.mockResolvedValue({
       players: [
         {

@@ -476,6 +476,22 @@ export function NewsTriageBoard({ leagueId }: { leagueId: string }) {
         ) : chunksError ? (
           <span className="text-xs text-amber-500/90">{chunksError}</span>
         ) : null}
+        {data?.providerNotes ? (
+          <span className="text-xs text-amber-500/90">{data.providerNotes}</span>
+        ) : null}
+        {data?.fetchStats && !data.cached ? (
+          <span className="text-xs text-slate-500">
+            Fetched {data.fetchStats.feedTotal} stories
+            {data.fetchStats.newestPublishedAt
+              ? ` · newest ${formatRelativeTime(data.fetchStats.newestPublishedAt)}`
+              : ""}
+            {data.fetchStats.redditHits > 0
+              ? ` · ${data.fetchStats.redditHits} from Reddit`
+              : data.fetchStats.sourceErrors > 0
+                ? " · some sources failed"
+                : ""}
+          </span>
+        ) : null}
         {data?.cached ? (
           <span className="text-xs text-slate-500">Cached feed (10 min)</span>
         ) : null}
