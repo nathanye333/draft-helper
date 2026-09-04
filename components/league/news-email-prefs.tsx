@@ -165,7 +165,9 @@ export function NewsEmailPrefs({ leagueId }: { leagueId: string }) {
           Daily digest to{" "}
           <span className="text-slate-300">{prefs.accountEmail ?? "your account email"}</span> around
           13:00 UTC (~9 AM ET), covering articles published in the last 24 hours. Instant alerts
-          cover Reddit spikes and urgent ESPN injury jumps.
+          cover Reddit spikes and urgent ESPN injury jumps — ESPN rosters are refreshed on a
+          schedule (hourly when GitHub Actions is configured; otherwise once daily on Vercel Hobby)
+          so injury emails fire without a manual sync.
         </p>
         {saving ? (
           <p className="text-sm text-amber-400/90">Saving your preferences…</p>

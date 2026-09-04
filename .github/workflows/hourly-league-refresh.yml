@@ -1,0 +1,51 @@
+# Hourly ESPN roster/injury refresh + Reddit spike scan.
+# Vercel Hobby only allows one daily cron; this workflow provides hourly coverage.
+#
+# Required GitHub Actions secrets:
+#   APP_URL      — e.g. https://your-app.vercel.app
+#   CRON_SECRET  — same value as Vercel CRON_SECRET
+
+name: Hourly league refresh
+
+on:
+  schedule:
+    # Every hour on the hour (UTC)
+    - cron: "0 * * * *"
+  workflow_dispatch:
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Trigger /api/cron/news-alerts
+        env:
+          APP_URL: ${{ secrets.APP_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -euo pipefail
+          if [ -z "${APP_URL:-}" ] || [ -z "${CRON_SECRET:-}" ]; then
+            echo "Missing APP_URL or CRON_SECRET GitHub Actions secrets."
+            exit 1
+          fi
+          BASE="${APP_URL%/}"
+          echo "POST ${BASE}/api/cron/news-alerts"
+          curl -fsS -X GET \
+            -H "Authorization: Bearer ${CRON_SECRET}" \
+            --max-time 110 \
+            "${BASE}/api/cron/news-alerts" | tee /tmp/cron-result.json
+          python3 - <<'PY'
+          import json, sys
+          data = json.load(open("/tmp/cron-result.json"))
+          if not data.get("ok"):
+            print("Cron response not ok:", data)
+            sys.exit(1)
+          espn = data.get("espn") or {}
+          print(
+              f"ESPN sync: leagues={espn.get('leagues')} synced={espn.get('synced')} "
+              f"failed={espn.get('failed')} injuryDeltas={espn.get('injuryDeltas')} "
+              f"emails={espn.get('injuryEmailsSent')}"
+          )
+          if espn.get("errors"):
+              print("Errors:", espn["errors"])
+          PY

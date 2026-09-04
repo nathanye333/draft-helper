@@ -1,4 +1,5 @@
 import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { isHealthyStatus } from "@/lib/news/injury-board";
 
 function normalizeStatus(status: string | null | undefined): string | null {
@@ -13,20 +14,17 @@ export interface RecordedInjuryDelta {
   toStatus: string;
 }
 
-export async function recordInjuryDeltas(
+type RosterInjuryRow = {
+  espn_player_id: number;
+  player_name: string;
+  injury_status: string | null;
+};
+
+function buildInjuryDeltaRows(
   leagueId: string,
-  previous: Array<{
-    espn_player_id: number;
-    player_name: string;
-    injury_status: string | null;
-  }>,
-  incoming: Array<{
-    espn_player_id: number;
-    player_name: string;
-    injury_status: string | null;
-  }>,
-): Promise<RecordedInjuryDelta[]> {
-  const supabase = await createClient();
+  previous: RosterInjuryRow[],
+  incoming: RosterInjuryRow[],
+) {
   const prevById = new Map(previous.map((p) => [Number(p.espn_player_id), p]));
   const rows: Array<{
     league_id: string;
@@ -53,6 +51,34 @@ export async function recordInjuryDeltas(
     });
   }
 
+  return rows;
+}
+
+export async function recordInjuryDeltas(
+  leagueId: string,
+  previous: RosterInjuryRow[],
+  incoming: RosterInjuryRow[],
+): Promise<RecordedInjuryDelta[]> {
+  const supabase = await createClient();
+  const rows = buildInjuryDeltaRows(leagueId, previous, incoming);
+  if (rows.length === 0) return [];
+  await supabase.from("league_injury_deltas").insert(rows);
+  return rows.map((r) => ({
+    espnPlayerId: r.espn_player_id,
+    playerName: r.player_name,
+    fromStatus: r.from_status,
+    toStatus: r.to_status,
+  }));
+}
+
+/** Service-role path for cron (no user cookies). */
+export async function recordInjuryDeltasAdmin(
+  leagueId: string,
+  previous: RosterInjuryRow[],
+  incoming: RosterInjuryRow[],
+): Promise<RecordedInjuryDelta[]> {
+  const supabase = createAdminClient();
+  const rows = buildInjuryDeltaRows(leagueId, previous, incoming);
   if (rows.length === 0) return [];
   await supabase.from("league_injury_deltas").insert(rows);
   return rows.map((r) => ({
