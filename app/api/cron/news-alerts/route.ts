@@ -1,17 +1,31 @@
 import { NextResponse } from "next/server";
 import { authorizeCronRequest, cronAuthErrorResponse } from "@/lib/cron/auth";
 import { runInstantRedditSpikeScan } from "@/lib/news/alerts";
+import { runScheduledEspnRefresh } from "@/lib/espn/scheduled-sync";
 
 export const runtime = "nodejs";
-export const maxDuration = 60;
+export const maxDuration = 120;
 
-/** Daily (Vercel Hobby): poll Reddit for roster spikes and email instant alerts. Pro can use a more frequent schedule in vercel.json. */
+/**
+ * ESPN roster/injury refresh + Reddit spike scan.
+ * Hobby: once daily via vercel.json. Hourly: enable the GitHub Actions workflow
+ * `.github/workflows/hourly-league-refresh.yml` (or upgrade to Vercel Pro and
+ * change the schedule below to `0 * * * *`).
+ */
 export async function GET(request: Request) {
   const auth = authorizeCronRequest(request);
   if (!auth.ok) {
     return cronAuthErrorResponse(auth.reason);
   }
 
-  const result = await runInstantRedditSpikeScan();
-  return NextResponse.json({ ok: true, ...result });
+  const espn = await runScheduledEspnRefresh();
+
+  let reddit: Awaited<ReturnType<typeof runInstantRedditSpikeScan>> | { error: string };
+  try {
+    reddit = await runInstantRedditSpikeScan();
+  } catch (err) {
+    reddit = { error: err instanceof Error ? err.message : "reddit spike scan failed" };
+  }
+
+  return NextResponse.json({ ok: true, espn, reddit });
 }
