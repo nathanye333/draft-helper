@@ -260,12 +260,17 @@ function parseRosters(teams: unknown[]): EspnRosterEntryParsed[] {
   return entries;
 }
 
-function parseMatchups(schedule: unknown[], week: number | null): EspnMatchupParsed[] {
-  if (week == null) return [];
+/**
+ * Parse every matchup period in the ESPN schedule (completed + upcoming).
+ * Callers used to keep only `currentWeek`, which wiped week-1 scores once the
+ * slate advanced — season agent / analysis need the full history.
+ */
+export function parseEspnMatchups(schedule: unknown[]): EspnMatchupParsed[] {
   const out: EspnMatchupParsed[] = [];
   for (const m of schedule) {
     const matchup = m as Record<string, unknown>;
-    if (Number(matchup.matchupPeriodId) !== week) continue;
+    const week = Number(matchup.matchupPeriodId);
+    if (!Number.isFinite(week) || week < 1) continue;
     const home = matchup.home as Record<string, unknown> | undefined;
     const away = matchup.away as Record<string, unknown> | undefined;
     if (!home?.teamId || !away?.teamId) continue;
@@ -281,7 +286,7 @@ function parseMatchups(schedule: unknown[], week: number | null): EspnMatchupPar
 }
 
 /**
- * Fetch league settings, teams, rosters, standings, and current-week matchups.
+ * Fetch league settings, teams, rosters, standings, and full-season matchups.
  * Server-only. Requires SWID + espn_s2 for private leagues.
  */
 export async function fetchEspnLeagueSnapshot(params: {
@@ -318,7 +323,7 @@ export async function fetchEspnLeagueSnapshot(params: {
     rosterSlots: mapRosterSlots(settings?.rosterSettings as Record<string, unknown> | undefined),
     teams: parseTeams(teamsRaw),
     rosterEntries: parseRosters(teamsRaw),
-    matchups: parseMatchups(schedule, currentWeek),
+    matchups: parseEspnMatchups(schedule),
   };
 }
 

@@ -77,8 +77,11 @@ export default async function StartSitPage({
   const opp = mine
     ? bundle.matchups.find(
         (m) =>
-          m.home_espn_team_id === mine.espn_team_id ||
-          m.away_espn_team_id === mine.espn_team_id,
+          (bundle.league.current_week == null ||
+            bundle.league.current_week <= 0 ||
+            m.week === bundle.league.current_week) &&
+          (m.home_espn_team_id === mine.espn_team_id ||
+            m.away_espn_team_id === mine.espn_team_id),
       )
     : undefined;
   let opponentName: string | null = null;

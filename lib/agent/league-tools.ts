@@ -66,11 +66,25 @@ export function createLeagueTools(
       const bundle = await fetchLeagueBundle(leagueId);
       if (!bundle) return json({ error: "League not found" });
       const mine = userTeam(bundle);
+      const currentWeek = bundle.league.current_week;
+      const matchups = [...bundle.matchups].sort(
+        (a, b) => a.week - b.week || a.home_espn_team_id - b.home_espn_team_id,
+      );
+      const matchupsThisWeek =
+        currentWeek != null && currentWeek > 0
+          ? matchups.filter((m) => m.week === currentWeek)
+          : [];
+      const completedMatchups = matchups.filter(
+        (m) =>
+          currentWeek != null &&
+          m.week < currentWeek &&
+          (m.home_points != null || m.away_points != null),
+      );
       return json({
         name: bundle.league.name,
         season: bundle.league.season,
         scoring: bundle.league.scoring,
-        currentWeek: bundle.league.current_week,
+        currentWeek,
         lastSyncedAt: bundle.league.last_synced_at,
         myTeam: mine
           ? {
@@ -81,12 +95,16 @@ export function createLeagueTools(
           : null,
         teamCount: bundle.teams.length,
         rosterSlots: rosterSlotsFromLeague(bundle.league),
-        matchupsThisWeek: bundle.matchups,
+        matchupsThisWeek,
+        completedMatchups,
+        note:
+          "completedMatchups keeps finished weeks (e.g. week 1 after the slate advances). Player weekly actuals: espn_week_points via analysis_sql, or analyze_season_players / player_consistency.",
       });
     },
     {
       name: "get_league_snapshot",
-      description: "League settings, your team, current week, matchups, roster slots.",
+      description:
+        "League settings, your team, current week, this week's matchups, and completed-week scores.",
       schema: z.object({}),
     },
   );
@@ -221,10 +239,15 @@ export function createLeagueTools(
         rosterSlots: rosterSlotsFromLeague(bundle.league),
         weekProjByFpId: weekProj,
       });
+      const currentWeek =
+        bundle.league.current_week && bundle.league.current_week > 0
+          ? bundle.league.current_week
+          : null;
       const opp = bundle.matchups.find(
         (m) =>
-          m.home_espn_team_id === mine.espn_team_id ||
-          m.away_espn_team_id === mine.espn_team_id,
+          (currentWeek == null || m.week === currentWeek) &&
+          (m.home_espn_team_id === mine.espn_team_id ||
+            m.away_espn_team_id === mine.espn_team_id),
       );
       let opponentName: string | null = null;
       if (opp) {

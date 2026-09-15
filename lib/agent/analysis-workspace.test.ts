@@ -25,9 +25,11 @@ describe("assertSafeAnalysisSql", () => {
   });
 });
 
-describe("analysisStatsSeasons", () => {
-  it("includes prior year for fantasy leagues", () => {
-    expect(analysisStatsSeasons(2026)).toEqual([2026, 2025]);
-    expect(analysisStatsSeasons(2025)).toEqual([2025, 2024]);
+describe("analysisBaseSchemaText", () => {
+  it("documents league_matchups and completed-week retention", async () => {
+    const { analysisBaseSchemaText } = await import("@/lib/agent/analysis-workspace");
+    const text = analysisBaseSchemaText();
+    expect(text).toContain("league_matchups");
+    expect(text).toMatch(/completed weeks/i);
   });
 });

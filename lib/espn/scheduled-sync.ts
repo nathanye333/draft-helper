@@ -1,7 +1,7 @@
 /**
  * Cookie-free ESPN sync for cron / service-role jobs.
- * Updates rosters + injury deltas (and emails) without a user session.
- * Skips heavy player-universe / FP projection sync to stay under cron time limits.
+ * Updates rosters, injury deltas, matchup history, and weekly player points
+ * without a user session. Skips FantasyPros projection sync (heavier / rate-limited).
  */
 
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -11,6 +11,7 @@ import {
   fetchEspnLeagueSnapshot,
   type EspnCookies,
 } from "@/lib/espn/client";
+import { persistEspnPlayerUniverse } from "@/lib/espn/sync";
 
 export type ScheduledSyncResult =
   | {
@@ -191,6 +192,26 @@ async function syncLeagueAdmin(leagueId: string): Promise<ScheduledSyncResult> {
       },
     })
     .eq("id", leagueId);
+
+  // Keep weekly actuals fresh for the season agent (best-effort; don't fail the cron).
+  try {
+    await persistEspnPlayerUniverse({
+      leagueId,
+      espnLeagueId: String(league.espn_league_id),
+      season: Number(league.season),
+      currentWeek: snapshot.currentWeek,
+      cookies,
+      rosterEspnIds: new Set(snapshot.rosterEntries.map((e) => e.espnPlayerId)),
+      rosterTeamByPlayer: new Map(
+        snapshot.rosterEntries.map((e) => [e.espnPlayerId, e.espnTeamId]),
+      ),
+    });
+  } catch (err) {
+    console.warn(
+      "[scheduled ESPN sync] player universe:",
+      err instanceof Error ? err.message : err,
+    );
+  }
 
   return {
     ok: true,

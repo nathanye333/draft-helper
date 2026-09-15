@@ -319,7 +319,8 @@ async function persistSnapshot(
   };
 }
 
-async function persistEspnPlayerUniverse(params: {
+/** Persist ESPN player pool + weekly points. Uses service role so cron can refresh too. */
+export async function persistEspnPlayerUniverse(params: {
   leagueId: string;
   espnLeagueId: string;
   season: number;
@@ -370,11 +371,10 @@ async function persistEspnPlayerUniverse(params: {
     })),
   );
 
-  const supabase = await createClient();
   const syncedAt = new Date().toISOString();
 
-  await supabase.from("league_player_pool").delete().eq("league_id", params.leagueId);
-  await supabase.from("espn_player_week_points").delete().eq("league_id", params.leagueId);
+  await admin.from("league_player_pool").delete().eq("league_id", params.leagueId);
+  await admin.from("espn_player_week_points").delete().eq("league_id", params.leagueId);
 
   const poolRows = universe.map((p) => {
     const summary = summaryFromUniverse(p, params.season, params.currentWeek);
@@ -398,7 +398,7 @@ async function persistEspnPlayerUniverse(params: {
   // Chunk inserts to avoid payload limits.
   for (let i = 0; i < poolRows.length; i += 400) {
     const chunk = poolRows.slice(i, i + 400);
-    const { error } = await supabase.from("league_player_pool").insert(chunk);
+    const { error } = await admin.from("league_player_pool").insert(chunk);
     if (error) throw new Error(error.message);
   }
 
@@ -431,7 +431,7 @@ async function persistEspnPlayerUniverse(params: {
 
   for (let i = 0; i < weekRows.length; i += 500) {
     const chunk = weekRows.slice(i, i + 500);
-    const { error } = await supabase.from("espn_player_week_points").insert(chunk);
+    const { error } = await admin.from("espn_player_week_points").insert(chunk);
     if (error) throw new Error(error.message);
   }
 }
