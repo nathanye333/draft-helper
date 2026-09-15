@@ -273,7 +273,27 @@ async function persistSnapshot(
     }
   }
 
-  await supabase.from("leagues").update({ last_synced_at: syncedAt }).eq("id", leagueId);
+  const { data: leagueRow } = await supabase
+    .from("leagues")
+    .select("settings")
+    .eq("id", leagueId)
+    .maybeSingle();
+  const prevSettings =
+    leagueRow && typeof leagueRow.settings === "object" && leagueRow.settings
+      ? (leagueRow.settings as Record<string, unknown>)
+      : {};
+
+  await supabase
+    .from("leagues")
+    .update({
+      last_synced_at: syncedAt,
+      settings: {
+        ...prevSettings,
+        lastSyncKind: "full",
+        lastFullSyncedAt: syncedAt,
+      },
+    })
+    .eq("id", leagueId);
 
   // ESPN projections + weekly fantasy points (this year + last year).
   try {
@@ -306,6 +326,21 @@ async function persistSnapshot(
   } catch (err) {
     console.warn(
       "FP projection sync after ESPN sync failed:",
+      err instanceof Error ? err.message : err,
+    );
+  }
+
+  try {
+    const { resolvePendingRecommendations } = await import(
+      "@/lib/agent/recommendation-resolve"
+    );
+    await resolvePendingRecommendations(leagueId, {
+      syncedAt,
+      syncKind: "full",
+    });
+  } catch (err) {
+    console.warn(
+      "Recommendation resolve after ESPN sync failed:",
       err instanceof Error ? err.message : err,
     );
   }

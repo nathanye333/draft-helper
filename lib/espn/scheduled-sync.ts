@@ -1,7 +1,8 @@
 /**
  * Cookie-free ESPN sync for cron / service-role jobs.
- * Updates rosters, injury deltas, matchup history, and weekly player points
- * without a user session. Skips FantasyPros projection sync (heavier / rate-limited).
+ *
+ * - full (default, daily): rosters + matchups + player universe / week points + FP projections
+ * - light (hourly optional): rosters + matchups + injuries only
  */
 
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -12,6 +13,11 @@ import {
   type EspnCookies,
 } from "@/lib/espn/client";
 import { persistEspnPlayerUniverse } from "@/lib/espn/sync";
+import { syncProjectionsForSeason } from "@/lib/fantasypros/projections-sync";
+import type { ScoringFormat } from "@/lib/supabase/types";
+import { resolvePendingRecommendations } from "@/lib/agent/recommendation-resolve";
+
+export type EspnSyncKind = "full" | "light";
 
 export type ScheduledSyncResult =
   | {
@@ -21,15 +27,25 @@ export type ScheduledSyncResult =
       injuryDeltas: number;
       injuryEmailsSent: number;
       syncedAt: string;
+      syncKind: EspnSyncKind;
+      recommendations?: {
+        resolved: number;
+        awaitingOutcome: number;
+        awaitingSync: number;
+        inconclusive: number;
+      };
     }
   | { ok: false; leagueId: string; reason: string; message: string };
 
-async function syncLeagueAdmin(leagueId: string): Promise<ScheduledSyncResult> {
+async function syncLeagueAdmin(
+  leagueId: string,
+  syncKind: EspnSyncKind,
+): Promise<ScheduledSyncResult> {
   const supabase = createAdminClient();
 
   const { data: league, error: leagueError } = await supabase
     .from("leagues")
-    .select("id, espn_league_id, season, my_espn_team_id, name, settings")
+    .select("id, espn_league_id, season, my_espn_team_id, name, settings, scoring")
     .eq("id", leagueId)
     .maybeSingle();
 
@@ -178,37 +194,86 @@ async function syncLeagueAdmin(leagueId: string): Promise<ScheduledSyncResult> {
     );
   }
 
+  const prevSettings =
+    typeof league.settings === "object" && league.settings
+      ? (league.settings as Record<string, unknown>)
+      : {};
+
   await supabase
     .from("leagues")
     .update({
       current_week: snapshot.currentWeek,
+      scoring: snapshot.scoring,
       last_synced_at: syncedAt,
       settings: {
-        ...(typeof league.settings === "object" && league.settings
-          ? (league.settings as Record<string, unknown>)
-          : {}),
+        ...prevSettings,
         name: snapshot.name,
         rosterSlots: snapshot.rosterSlots,
+        lastSyncKind: syncKind,
+        lastFullSyncedAt: syncKind === "full" ? syncedAt : prevSettings.lastFullSyncedAt,
       },
     })
     .eq("id", leagueId);
 
-  // Keep weekly actuals fresh for the season agent (best-effort; don't fail the cron).
+  if (syncKind === "full") {
+    try {
+      await persistEspnPlayerUniverse({
+        leagueId,
+        espnLeagueId: String(league.espn_league_id),
+        season: Number(league.season),
+        currentWeek: snapshot.currentWeek,
+        cookies,
+        rosterEspnIds: new Set(snapshot.rosterEntries.map((e) => e.espnPlayerId)),
+        rosterTeamByPlayer: new Map(
+          snapshot.rosterEntries.map((e) => [e.espnPlayerId, e.espnTeamId]),
+        ),
+      });
+    } catch (err) {
+      console.warn(
+        "[scheduled ESPN sync] player universe:",
+        err instanceof Error ? err.message : err,
+      );
+    }
+
+    try {
+      const scoring = (snapshot.scoring || league.scoring || "PPR") as ScoringFormat;
+      const week = snapshot.currentWeek && snapshot.currentWeek > 0 ? snapshot.currentWeek : 0;
+      await syncProjectionsForSeason({
+        season: Number(league.season),
+        scoring,
+        weeks: week > 0 ? [0, week] : [0],
+      });
+    } catch (err) {
+      console.warn(
+        "[scheduled ESPN sync] FP projections:",
+        err instanceof Error ? err.message : err,
+      );
+    }
+  }
+
+  let recommendations:
+    | {
+        resolved: number;
+        awaitingOutcome: number;
+        awaitingSync: number;
+        inconclusive: number;
+      }
+    | undefined;
+
   try {
-    await persistEspnPlayerUniverse({
-      leagueId,
-      espnLeagueId: String(league.espn_league_id),
-      season: Number(league.season),
-      currentWeek: snapshot.currentWeek,
-      cookies,
-      rosterEspnIds: new Set(snapshot.rosterEntries.map((e) => e.espnPlayerId)),
-      rosterTeamByPlayer: new Map(
-        snapshot.rosterEntries.map((e) => [e.espnPlayerId, e.espnTeamId]),
-      ),
+    const resolved = await resolvePendingRecommendations(leagueId, {
+      syncedAt,
+      syncKind,
     });
+    recommendations = {
+      resolved: resolved.resolved,
+      awaitingOutcome: resolved.awaitingOutcome,
+      awaitingSync: resolved.awaitingSync,
+      inconclusive: resolved.inconclusive,
+    };
   } catch (err) {
     console.warn(
-      "[scheduled ESPN sync] player universe:",
+      "[scheduled ESPN sync] recommendation resolve:",
       err instanceof Error ? err.message : err,
     );
   }
@@ -220,19 +285,25 @@ async function syncLeagueAdmin(leagueId: string): Promise<ScheduledSyncResult> {
     injuryDeltas,
     injuryEmailsSent,
     syncedAt,
+    syncKind,
+    recommendations,
   };
 }
 
 /** Sync every league that has stored ESPN credentials. */
-export async function runScheduledEspnRefresh(): Promise<{
+export async function runScheduledEspnRefresh(opts?: {
+  syncKind?: EspnSyncKind;
+}): Promise<{
   leagues: number;
   synced: number;
   failed: number;
   injuryDeltas: number;
   injuryEmailsSent: number;
+  syncKind: EspnSyncKind;
   errors: string[];
   results: ScheduledSyncResult[];
 }> {
+  const syncKind = opts?.syncKind ?? "full";
   const supabase = createAdminClient();
   const { data: credRows, error } = await supabase
     .from("league_espn_credentials")
@@ -245,6 +316,7 @@ export async function runScheduledEspnRefresh(): Promise<{
       failed: 0,
       injuryDeltas: 0,
       injuryEmailsSent: 0,
+      syncKind,
       errors: [error.message],
       results: [],
     };
@@ -260,7 +332,7 @@ export async function runScheduledEspnRefresh(): Promise<{
 
   for (const leagueId of leagueIds) {
     try {
-      const result = await syncLeagueAdmin(leagueId);
+      const result = await syncLeagueAdmin(leagueId, syncKind);
       results.push(result);
       if (result.ok) {
         synced += 1;
@@ -284,6 +356,7 @@ export async function runScheduledEspnRefresh(): Promise<{
     failed,
     injuryDeltas,
     injuryEmailsSent,
+    syncKind,
     errors,
     results,
   };

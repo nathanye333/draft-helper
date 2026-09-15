@@ -133,6 +133,7 @@ function leagueSystemPrompt(
   leagueId: string,
   workingLineup?: WorkingLineupEntry[] | null,
 ): string {
+  // Fallback only — prefer loadSeasonSystemPrompt() for versioned skills.
   const parts = [
     "You are a fantasy football season advisor for this user's ESPN-synced league.",
     `League id: ${leagueId}.`,
@@ -161,17 +162,40 @@ function leagueSystemPrompt(
   return parts.join(" ");
 }
 
-function createAgentForLeague(
+async function loadSeasonSystemPrompt(
   leagueId: string,
-  llm: LlmConfig,
   workingLineup?: WorkingLineupEntry[] | null,
-) {
-  return createAgent({
-    model: createChatModel(llm),
-    tools: createLeagueTools(leagueId, { workingLineup }),
-    systemPrompt: leagueSystemPrompt(leagueId, workingLineup),
-    middleware: [createAnalysisSchemaMiddleware()],
-  });
+): Promise<{ prompt: string; skillVersion: number }> {
+  try {
+    const { getActiveSeasonSkill, renderSeasonSkill } = await import(
+      "@/lib/agent/season-skill"
+    );
+    const skill = await getActiveSeasonSkill();
+    let workingLineupBlock: string | undefined;
+    if (workingLineup && workingLineup.length > 0) {
+      const lines = workingLineup.map(
+        (p) =>
+          `${p.slot}: ${p.name} (${p.position}${p.weekProj != null ? `, ${p.weekProj.toFixed(1)} proj` : ""})`,
+      );
+      workingLineupBlock = [
+        "The user currently has this temporary Start/Sit sandbox arrangement (prefer get_my_roster / this list over ESPN sync when discussing their lineup):",
+        lines.join("; "),
+      ].join(" ");
+    }
+    return {
+      prompt: renderSeasonSkill(skill.content, { leagueId, workingLineupBlock }),
+      skillVersion: skill.version,
+    };
+  } catch (err) {
+    console.warn(
+      "[league-agent] skill load failed, using inline prompt:",
+      err instanceof Error ? err.message : err,
+    );
+    return {
+      prompt: leagueSystemPrompt(leagueId, workingLineup),
+      skillVersion: 0,
+    };
+  }
 }
 
 /** Simple async fan-in queue for parallel message/tool streams. */
@@ -383,7 +407,16 @@ export async function* streamLeagueChatAgent(params: {
     return;
   }
 
-  const agent = createAgentForLeague(params.leagueId, params.llm, params.workingLineup);
+  const { prompt, skillVersion } = await loadSeasonSystemPrompt(
+    params.leagueId,
+    params.workingLineup,
+  );
+  const agent = createAgent({
+    model: createChatModel(params.llm),
+    tools: createLeagueTools(params.leagueId, { workingLineup: params.workingLineup }),
+    systemPrompt: prompt,
+    middleware: [createAnalysisSchemaMiddleware()],
+  });
   const queue = createEventQueue<DraftAgentStreamEvent>();
 
   const runPromise = (async () => {
@@ -467,19 +500,23 @@ export async function* streamLeagueChatAgent(params: {
 
   const finished = runPromise
     .then(() => {
-      queue.push({ type: "done", stopped: Boolean(params.signal?.aborted) });
+      queue.push({
+        type: "done",
+        stopped: Boolean(params.signal?.aborted),
+        skillVersion,
+      });
       queue.close();
     })
     .catch((err) => {
       if (params.signal?.aborted) {
-        queue.push({ type: "done", stopped: true });
+        queue.push({ type: "done", stopped: true, skillVersion });
         queue.close();
         return;
       }
       const message = err instanceof Error ? err.message : "Agent failed";
       console.error("[league-agent] stream failed:", message);
       queue.push({ type: "error", message });
-      queue.push({ type: "done" });
+      queue.push({ type: "done", skillVersion });
       queue.close();
     });
 

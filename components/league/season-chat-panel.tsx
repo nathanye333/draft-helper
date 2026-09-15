@@ -32,6 +32,9 @@ interface ChatMessage {
   toolCalls?: ToolCallVM[];
   streaming?: boolean;
   stopped?: boolean;
+  /** Persisted DB id once the turn is saved (for thumbs). */
+  persistedId?: string;
+  feedback?: "up" | "down" | null;
 }
 
 interface SessionSummary {
@@ -75,6 +78,7 @@ function newId() {
 function storedToChatMessage(m: StoredMessagePayload): ChatMessage {
   return {
     id: m.id,
+    persistedId: m.id,
     role: m.role,
     content: m.content || (m.stopped ? "Stopped." : ""),
     reasoning: m.reasoning ?? undefined,
@@ -249,9 +253,32 @@ export function SeasonChatPanel({
     }
 
     setActiveSessionId(data.session.id);
-    setMessages(data.session.messages.map(storedToChatMessage));
+    const mapped = data.session.messages.map(storedToChatMessage);
+    setMessages(mapped);
     setError(null);
     setSessionsOpen(false);
+
+    const assistantIds = mapped
+      .filter((m) => m.role === "assistant" && m.persistedId)
+      .map((m) => m.persistedId!)
+      .slice(0, 100);
+    if (assistantIds.length > 0) {
+      void fetch(
+        `/api/leagues/${leagueId}/chat/feedback?messageIds=${assistantIds.join(",")}`,
+      )
+        .then((r) => r.json())
+        .then((body: { ok?: boolean; feedback?: Record<string, "up" | "down"> }) => {
+          if (!body.ok || !body.feedback) return;
+          setMessages((prev) =>
+            prev.map((m) => {
+              const id = m.persistedId;
+              if (!id || !body.feedback![id]) return m;
+              return { ...m, feedback: body.feedback![id] };
+            }),
+          );
+        })
+        .catch(() => {});
+    }
 
     const summary: SessionSummary = {
       id: data.session.id,
@@ -567,6 +594,7 @@ export function SeasonChatPanel({
               ...m,
               streaming: false,
               stopped,
+              persistedId: event.messageId ?? m.persistedId,
               content:
                 m.content.trim() ||
                 (stopped ? "Stopped." : m.reasoning ? "" : "No response from the model."),
@@ -640,6 +668,30 @@ export function SeasonChatPanel({
   }
 
   sendRef.current = send;
+
+  async function submitFeedback(message: ChatMessage, rating: "up" | "down") {
+    const messageId = message.persistedId;
+    if (!messageId || message.streaming) return;
+    patchLocalFeedback(message.id, rating);
+    try {
+      const res = await fetch(`/api/leagues/${leagueId}/chat/feedback`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ messageId, rating }),
+      });
+      if (!res.ok) {
+        patchLocalFeedback(message.id, message.feedback ?? null);
+      }
+    } catch {
+      patchLocalFeedback(message.id, message.feedback ?? null);
+    }
+  }
+
+  function patchLocalFeedback(id: string, rating: "up" | "down" | null) {
+    setMessages((prev) =>
+      prev.map((m) => (m.id === id ? { ...m, feedback: rating } : m)),
+    );
+  }
 
   useEffect(() => {
     if (!seedPrompt?.trim()) return;
@@ -843,6 +895,34 @@ export function SeasonChatPanel({
                 ) : null}
                 {m.stopped ? (
                   <p className="mt-1 text-[11px] text-slate-500">Stopped</p>
+                ) : null}
+                {!m.streaming && m.persistedId && m.content ? (
+                  <div className="mt-1.5 flex items-center gap-1">
+                    <button
+                      type="button"
+                      className={`rounded px-1.5 py-0.5 text-[11px] ${
+                        m.feedback === "up"
+                          ? "bg-emerald-900/50 text-emerald-300"
+                          : "text-slate-500 hover:bg-slate-800 hover:text-slate-300"
+                      }`}
+                      aria-label="Thumbs up"
+                      onClick={() => void submitFeedback(m, "up")}
+                    >
+                      ▲
+                    </button>
+                    <button
+                      type="button"
+                      className={`rounded px-1.5 py-0.5 text-[11px] ${
+                        m.feedback === "down"
+                          ? "bg-rose-900/50 text-rose-300"
+                          : "text-slate-500 hover:bg-slate-800 hover:text-slate-300"
+                      }`}
+                      aria-label="Thumbs down"
+                      onClick={() => void submitFeedback(m, "down")}
+                    >
+                      ▼
+                    </button>
+                  </div>
                 ) : null}
               </div>
             )}

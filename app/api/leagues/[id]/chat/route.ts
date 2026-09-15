@@ -9,6 +9,11 @@ import {
 } from "@/lib/agent/league-chat-sessions";
 import type { DraftAgentStreamEvent } from "@/lib/agent/stream-types";
 import { resolveOpenAiApiKey } from "@/lib/agent/server-llm";
+import {
+  detectFollowUpRequired,
+  extractClaimsFromToolCalls,
+  logSeasonRecommendation,
+} from "@/lib/agent/recommendation-ledger";
 import { fetchLeagueBundle } from "@/lib/league/data";
 import { createClient } from "@/lib/supabase/server";
 
@@ -117,6 +122,7 @@ export async function POST(
   }
 
   const resolvedSessionId = sessionId;
+  const startedAt = Date.now();
 
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
@@ -130,8 +136,12 @@ export async function POST(
 
       let assistantContent = "";
       let assistantReasoning = "";
-      const toolCalls = new Map<string, StoredToolCall>();
+      const toolCalls = new Map<string, StoredToolCall & { startedAt?: number }>();
       let stopped = false;
+      let firstTokenAt: number | null = null;
+      let skillVersion: number | undefined;
+      let toolLatencyMs = 0;
+      let toolErrorCount = 0;
 
       send({ type: "session", sessionId: resolvedSessionId });
 
@@ -161,8 +171,10 @@ export async function POST(
           }
 
           if (event.type === "token") {
+            if (firstTokenAt == null) firstTokenAt = Date.now();
             assistantContent += event.delta;
           } else if (event.type === "reasoning") {
+            if (firstTokenAt == null) firstTokenAt = Date.now();
             assistantReasoning += event.delta;
           } else if (event.type === "tool_start") {
             toolCalls.set(event.id, {
@@ -170,9 +182,18 @@ export async function POST(
               name: event.name,
               input: event.input,
               status: "running",
+              startedAt: Date.now(),
             });
           } else if (event.type === "tool_end") {
             const existing = toolCalls.get(event.id);
+            if (existing?.startedAt) {
+              toolLatencyMs += Date.now() - existing.startedAt;
+            }
+            const looksError =
+              !event.output ||
+              /^tool failed/i.test(event.output) ||
+              /"error"\s*:/.test(event.output);
+            if (looksError) toolErrorCount += 1;
             toolCalls.set(event.id, {
               id: event.id,
               name: event.name,
@@ -182,6 +203,7 @@ export async function POST(
             });
           } else if (event.type === "done") {
             stopped = Boolean(event.stopped);
+            skillVersion = event.skillVersion;
             pendingDone = event;
             continue;
           } else if (event.type === "error") {
@@ -198,16 +220,58 @@ export async function POST(
           assistantContent.trim() ||
           (stopped ? "Stopped." : assistantReasoning.trim() ? "" : "No response from the model.");
 
+        const endedAt = Date.now();
+        let assistantMessageId: string | undefined;
+
         try {
-          await appendLeagueChatTurn(supabase, resolvedSessionId, {
+          const persisted = await appendLeagueChatTurn(supabase, resolvedSessionId, {
             userContent: userTurn.content,
             assistant: {
               content: finalContent,
               reasoning: assistantReasoning.trim() || undefined,
-              toolCalls: [...toolCalls.values()],
+              toolCalls: [...toolCalls.values()].map(({ startedAt: _s, ...rest }) => rest),
               stopped,
             },
           });
+          assistantMessageId = persisted.assistantMessageId;
+
+          const followUp = detectFollowUpRequired(finalContent);
+          await supabase.from("agent_turn_metrics").insert({
+            message_id: persisted.assistantMessageId,
+            session_id: resolvedSessionId,
+            league_id: leagueId,
+            user_id: user.id,
+            agent_kind: "season",
+            latency_ms: endedAt - startedAt,
+            ttft_ms: firstTokenAt != null ? firstTokenAt - startedAt : null,
+            tool_count: toolCalls.size,
+            tool_latency_ms: toolLatencyMs || null,
+            tool_error_count: toolErrorCount,
+            model,
+            provider,
+            skill_version: skillVersion ?? null,
+            follow_up_required: followUp,
+          });
+
+          const week =
+            bundle.league.current_week && bundle.league.current_week > 0
+              ? bundle.league.current_week
+              : null;
+          const claims = extractClaimsFromToolCalls({
+            leagueId,
+            userId: user.id,
+            season: bundle.league.season,
+            week,
+            skillVersion: skillVersion ?? null,
+            sourceMessageId: persisted.assistantMessageId,
+            toolCalls: [...toolCalls.values()].map((t) => ({
+              name: t.name,
+              output: t.output,
+            })),
+          });
+          for (const claim of claims) {
+            await logSeasonRecommendation(claim, supabase);
+          }
         } catch (persistErr) {
           console.error(
             "[season-agent] failed to persist chat turn:",
@@ -215,7 +279,13 @@ export async function POST(
           );
         }
 
-        send(pendingDone ?? { type: "done", stopped });
+        send({
+          ...(pendingDone ?? { type: "done", stopped }),
+          type: "done",
+          stopped,
+          skillVersion,
+          messageId: assistantMessageId,
+        });
       } catch (err) {
         const message = err instanceof Error ? err.message : "Agent failed";
         send({ type: "error", message });

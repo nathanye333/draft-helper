@@ -29,11 +29,12 @@ jobs:
             exit 1
           fi
           BASE="${APP_URL%/}"
-          echo "POST ${BASE}/api/cron/news-alerts"
+          # Light sync hourly (rosters/injuries). Daily Vercel cron does full sync.
+          echo "GET ${BASE}/api/cron/news-alerts?espnSync=light"
           curl -fsS -X GET \
             -H "Authorization: Bearer ${CRON_SECRET}" \
             --max-time 110 \
-            "${BASE}/api/cron/news-alerts" | tee /tmp/cron-result.json
+            "${BASE}/api/cron/news-alerts?espnSync=light" | tee /tmp/cron-result.json
           python3 - <<'PY'
           import json, sys
           data = json.load(open("/tmp/cron-result.json"))

@@ -158,7 +158,7 @@ export async function appendLeagueChatTurn(
   supabase: SupabaseClient,
   sessionId: string,
   turn: PersistTurnInput,
-): Promise<void> {
+): Promise<{ userMessageId: string; assistantMessageId: string }> {
   const { data: session, error: sessionError } = await supabase
     .from("league_agent_sessions")
     .select("id, title")
@@ -198,8 +198,18 @@ export async function appendLeagueChatTurn(
     },
   ];
 
-  const { error: insertError } = await supabase.from("league_agent_messages").insert(rows);
+  const { data: inserted, error: insertError } = await supabase
+    .from("league_agent_messages")
+    .insert(rows)
+    .select("id, role");
+
   if (insertError) throw new Error(insertError.message);
+
+  const userRow = (inserted ?? []).find((r) => r.role === "user");
+  const assistantRow = (inserted ?? []).find((r) => r.role === "assistant");
+  if (!userRow?.id || !assistantRow?.id) {
+    throw new Error("Failed to persist chat turn ids");
+  }
 
   const patch: { updated_at: string; title?: string } = {
     updated_at: new Date().toISOString(),
@@ -214,4 +224,9 @@ export async function appendLeagueChatTurn(
     .eq("id", sessionId);
 
   if (updateError) throw new Error(updateError.message);
+
+  return {
+    userMessageId: String(userRow.id),
+    assistantMessageId: String(assistantRow.id),
+  };
 }

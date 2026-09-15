@@ -1,16 +1,19 @@
 import { NextResponse } from "next/server";
 import { authorizeCronRequest, cronAuthErrorResponse } from "@/lib/cron/auth";
 import { runInstantRedditSpikeScan } from "@/lib/news/alerts";
-import { runScheduledEspnRefresh } from "@/lib/espn/scheduled-sync";
+import {
+  runScheduledEspnRefresh,
+  type EspnSyncKind,
+} from "@/lib/espn/scheduled-sync";
 
 export const runtime = "nodejs";
-export const maxDuration = 120;
+/** Full ESPN sync (player universe + FP projections) can exceed 60s with many leagues. */
+export const maxDuration = 300;
 
 /**
- * ESPN roster/injury refresh + Reddit spike scan.
- * Hobby: once daily via vercel.json. Hourly: enable the GitHub Actions workflow
- * `.github/workflows/hourly-league-refresh.yml` (or upgrade to Vercel Pro and
- * change the schedule below to `0 * * * *`).
+ * ESPN refresh + Reddit spike scan.
+ * Daily Vercel cron: full sync (rosters, week points, FP projections).
+ * Hourly GH Actions: pass ?espnSync=light for injury/roster-only refresh.
  */
 export async function GET(request: Request) {
   const auth = authorizeCronRequest(request);
@@ -18,7 +21,11 @@ export async function GET(request: Request) {
     return cronAuthErrorResponse(auth.reason);
   }
 
-  const espn = await runScheduledEspnRefresh();
+  const url = new URL(request.url);
+  const syncParam = url.searchParams.get("espnSync")?.trim().toLowerCase();
+  const syncKind: EspnSyncKind = syncParam === "light" ? "light" : "full";
+
+  const espn = await runScheduledEspnRefresh({ syncKind });
 
   let reddit: Awaited<ReturnType<typeof runInstantRedditSpikeScan>> | { error: string };
   try {
