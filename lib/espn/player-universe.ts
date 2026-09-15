@@ -153,8 +153,9 @@ function mapOwnership(raw: string | undefined, onTeamId: number | null): EspnOwn
  * Parse ESPN stat id / externalId like:
  * - 002026 / 102026 → season actual/projected (week 0)
  * - 1120261 → week-1 projected (source=1, split=1, year=2026, week=1)
+ * - 0120261 → week-1 actual
  */
-function parseEspnStatId(
+export function parseEspnStatId(
   rawId: unknown,
 ): { seasonId: number; week: number; statSourceId: number } | null {
   const id = String(rawId ?? "");
@@ -166,6 +167,30 @@ function parseEspnStatId(
   const week = split === 0 ? 0 : m[4] ? Number(m[4]) : 0;
   if (!Number.isFinite(seasonId)) return null;
   return { seasonId, week, statSourceId };
+}
+
+/**
+ * Stat ids to force into kona_player_info beyond topPeriods.
+ * Explicit weekly actuals for weeks 1..currentWeek — early season, topPeriods
+ * alone often omits completed weeks once the slate advances.
+ */
+export function espnWeeklyStatAdditionalValues(params: {
+  season: number;
+  currentWeek: number;
+}): string[] {
+  const prior = params.season - 1;
+  const week = Math.max(1, Math.min(Math.floor(params.currentWeek), 18));
+  const values = [
+    `00${params.season}`,
+    `10${params.season}`,
+    `00${prior}`,
+    `10${prior}`,
+  ];
+  for (let w = 1; w <= week; w++) {
+    values.push(`01${params.season}${w}`);
+  }
+  values.push(`11${params.season}${week}`);
+  return values;
 }
 
 function parsePlayerStats(
@@ -225,15 +250,12 @@ export async function fetchEspnPlayerUniverse(params: {
   // Prefer the league's current week; before kickoff ESPN often sits on week 1.
   const scoringPeriod =
     params.currentWeek != null && params.currentWeek > 0 ? params.currentWeek : 1;
-  // Stat ids: 00YEAR = season actual, 10YEAR = season projected,
-  // 11YEARWEEK = weekly projected (required — topPeriods alone won't include preseason week proj).
-  const additionalValue = [
-    `00${params.season}`,
-    `10${params.season}`,
-    `00${prior}`,
-    `10${prior}`,
-    `11${params.season}${scoringPeriod}`,
-  ];
+  // 00/10YEAR = season totals; 01YEARWEEK = weekly actuals through current week;
+  // 11YEARWEEK = current week projected (topPeriods alone omits early-season weeks).
+  const additionalValue = espnWeeklyStatAdditionalValues({
+    season: params.season,
+    currentWeek: scoringPeriod,
+  });
   const topPeriods = 18;
 
   const path = `/seasons/${params.season}/segments/0/leagues/${params.leagueId}`;
