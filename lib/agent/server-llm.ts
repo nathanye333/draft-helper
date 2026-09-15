@@ -3,11 +3,10 @@
  * Never import this into client components.
  */
 
-const SERVER_DEFAULT_OPENAI_EMAILS = new Set(["yenathan537@gmail.com"]);
+import { isAdminEmail } from "@/lib/admin/allowlist";
 
 export function emailHasServerOpenAiDefault(email: string | null | undefined): boolean {
-  if (!email) return false;
-  return SERVER_DEFAULT_OPENAI_EMAILS.has(email.trim().toLowerCase());
+  return isAdminEmail(email);
 }
 
 /** Prefer the client BYOK key; fall back to OPENAI_API_KEY for allowlisted emails only. */
