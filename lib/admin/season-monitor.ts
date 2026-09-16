@@ -44,6 +44,19 @@ export interface SeasonMonitorSnapshot {
     created_at: string;
     resolved_at: string | null;
   }[];
+  abilities: {
+    id: string;
+    slug: string;
+    title: string;
+    description: string;
+    ability_kind: string;
+    status: string;
+    skill_bullet: string | null;
+    spec_json: unknown;
+    evidence_json: unknown;
+    decided_by: string | null;
+    created_at: string;
+  }[];
 }
 
 /** Global (all users) season-agent self-improvement snapshot for admin UI. */
@@ -138,6 +151,15 @@ export async function loadSeasonMonitorSnapshot(): Promise<SeasonMonitorSnapshot
     .order("created_at", { ascending: false })
     .limit(20);
 
+  const { data: abilities } = await admin
+    .from("agent_abilities")
+    .select(
+      "id, slug, title, description, ability_kind, status, skill_bullet, spec_json, evidence_json, decided_by, created_at",
+    )
+    .eq("kind", "season")
+    .order("created_at", { ascending: false })
+    .limit(30);
+
   return {
     windowDays: WINDOW_DAYS,
     skill: {
@@ -175,6 +197,19 @@ export async function loadSeasonMonitorSnapshot(): Promise<SeasonMonitorSnapshot
       failure_tags: r.failure_tags,
       created_at: String(r.created_at),
       resolved_at: r.resolved_at != null ? String(r.resolved_at) : null,
+    })),
+    abilities: (abilities ?? []).map((a) => ({
+      id: String(a.id),
+      slug: String(a.slug),
+      title: String(a.title),
+      description: String(a.description ?? ""),
+      ability_kind: String(a.ability_kind),
+      status: String(a.status),
+      skill_bullet: a.skill_bullet != null ? String(a.skill_bullet) : null,
+      spec_json: a.spec_json,
+      evidence_json: a.evidence_json,
+      decided_by: a.decided_by != null ? String(a.decided_by) : null,
+      created_at: String(a.created_at),
     })),
   };
 }

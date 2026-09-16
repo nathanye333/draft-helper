@@ -9,6 +9,12 @@ import {
   invalidateSeasonSkillCache,
   SEASON_SKILL_KIND,
 } from "@/lib/agent/season-skill";
+import {
+  dedupeAbilityProposals,
+  proposeAbilitiesFromEvidence,
+  workflowBulletsForMerge,
+  type AbilityProposal,
+} from "@/lib/agent/ability-catalog";
 
 const MIN_EVIDENCE_TURNS = 5;
 const MIN_RESOLVED_RECS = 3;
@@ -24,6 +30,8 @@ export interface SkillSleepResult {
   gateBefore?: number;
   gateAfter?: number;
   costEstimateUsd?: number;
+  abilitiesProposed?: number;
+  abilitiesAccepted?: number;
 }
 
 interface EvidenceBundle {
@@ -109,7 +117,6 @@ async function harvestEvidence(sinceDays = 14): Promise<EvidenceBundle> {
     .map((r) => `${r.claim_type}: ${r.outcome_notes ?? "validated"}`);
 
   const avgLatency = latencyN > 0 ? latencySum / latencyN : null;
-  // 0 at 90s+, 1 at <=15s
   const latencyScore =
     avgLatency == null
       ? null
@@ -150,7 +157,16 @@ function applyBoundedEdits(content: string, ops: EditOp[]): string {
   return out.replace(/\n{3,}/g, "\n\n").trim();
 }
 
-/** Heuristic optimizer when no API key / to stay within budget. */
+function mergeWorkflowBullets(content: string, bullets: string[]): string {
+  let out = content.trim();
+  for (const bullet of bullets) {
+    if (!bullet) continue;
+    if (out.includes(bullet)) continue;
+    out = `${out}\n\n${bullet}`;
+  }
+  return out.replace(/\n{3,}/g, "\n\n").trim();
+}
+
 function proposeHeuristicEdits(evidence: EvidenceBundle): EditOp[] {
   const ops: EditOp[] = [];
 
@@ -263,9 +279,132 @@ function scoreSkill(content: string, evidence: EvidenceBundle) {
   });
 }
 
+async function loadExistingAbilitySlugs(): Promise<Set<string>> {
+  const admin = createAdminClient();
+  const { data } = await admin
+    .from("agent_abilities")
+    .select("slug")
+    .eq("kind", SEASON_SKILL_KIND)
+    .limit(500);
+  return new Set((data ?? []).map((r) => String(r.slug)));
+}
+
+/** Promote previously proposed workflows whose bullets landed in a gated skill. */
+async function acceptProposedWorkflowsInSkill(params: {
+  skillContent: string;
+  sleepAt: string;
+}): Promise<number> {
+  const admin = createAdminClient();
+  const { data } = await admin
+    .from("agent_abilities")
+    .select("id, skill_bullet")
+    .eq("kind", SEASON_SKILL_KIND)
+    .eq("ability_kind", "workflow")
+    .eq("status", "proposed")
+    .limit(100);
+
+  let accepted = 0;
+  for (const row of data ?? []) {
+    const bullet = row.skill_bullet != null ? String(row.skill_bullet).trim() : "";
+    if (!bullet || !params.skillContent.includes(bullet)) continue;
+    const { error } = await admin
+      .from("agent_abilities")
+      .update({
+        status: "accepted",
+        decided_at: params.sleepAt,
+        decided_by: "skill-sleep-auto",
+        source_sleep_at: params.sleepAt,
+      })
+      .eq("id", row.id)
+      .eq("status", "proposed");
+    if (!error) accepted += 1;
+  }
+  return accepted;
+}
+
+async function persistAbilityProposals(params: {
+  proposals: AbilityProposal[];
+  gatePassed: boolean;
+  mergedWorkflowSlugs: Set<string>;
+  sleepAt: string;
+  promotedSkillContent: string | null;
+}): Promise<{ proposed: number; accepted: number }> {
+  const admin = createAdminClient();
+  let proposed = 0;
+  let accepted = 0;
+
+  for (const p of params.proposals) {
+    const isWorkflowMerged =
+      params.gatePassed &&
+      p.abilityKind === "workflow" &&
+      params.mergedWorkflowSlugs.has(p.slug);
+
+    const status = isWorkflowMerged ? "accepted" : "proposed";
+    const row = {
+      kind: SEASON_SKILL_KIND,
+      slug: p.slug,
+      title: p.title,
+      description: p.description,
+      ability_kind: p.abilityKind,
+      status,
+      skill_bullet: p.skillBullet,
+      spec_json: p.specJson,
+      evidence_json: p.evidenceJson,
+      source_sleep_at: params.sleepAt,
+      decided_at: isWorkflowMerged ? params.sleepAt : null,
+      decided_by: isWorkflowMerged ? "skill-sleep-auto" : null,
+    };
+
+    const { data: existing } = await admin
+      .from("agent_abilities")
+      .select("id, status")
+      .eq("kind", SEASON_SKILL_KIND)
+      .eq("slug", p.slug)
+      .maybeSingle();
+
+    if (!existing) {
+      const { error } = await admin.from("agent_abilities").insert(row);
+      if (error) {
+        console.warn("[skill-sleep] ability insert:", error.message);
+        continue;
+      }
+      proposed += 1;
+      if (isWorkflowMerged) accepted += 1;
+      continue;
+    }
+
+    // Existing row: only auto-promote proposed workflows when gate passed.
+    if (isWorkflowMerged && existing.status === "proposed") {
+      const { error } = await admin
+        .from("agent_abilities")
+        .update({
+          status: "accepted",
+          skill_bullet: p.skillBullet,
+          evidence_json: p.evidenceJson,
+          source_sleep_at: params.sleepAt,
+          decided_at: params.sleepAt,
+          decided_by: "skill-sleep-auto",
+        })
+        .eq("id", existing.id);
+      if (!error) accepted += 1;
+    }
+  }
+
+  // Also accept older proposed workflows whose bullets are in the promoted skill.
+  if (params.gatePassed && params.promotedSkillContent) {
+    accepted += await acceptProposedWorkflowsInSkill({
+      skillContent: params.promotedSkillContent,
+      sleepAt: params.sleepAt,
+    });
+  }
+
+  return { proposed, accepted };
+}
+
 /**
  * Weekly SkillOpt-Sleep loop for the season agent skill.
- * Reflect → bounded edit → held-out fixture/metric gate → promote or reject.
+ * Reflect → bounded edit (+ workflow ability bullets) → held-out gate → promote or reject.
+ * Tool/schema abilities are catalogued as proposed for /admin approval.
  */
 export async function runSeasonSkillSleep(opts?: {
   force?: boolean;
@@ -273,6 +412,7 @@ export async function runSeasonSkillSleep(opts?: {
 }): Promise<SkillSleepResult> {
   const maxUsd = opts?.maxUsd ?? Number(process.env.AGENT_SLEEP_MAX_USD || DEFAULT_BUDGET_USD);
   const evidence = await harvestEvidence();
+  const sleepAt = new Date().toISOString();
 
   if (
     !opts?.force &&
@@ -285,22 +425,30 @@ export async function runSeasonSkillSleep(opts?: {
     };
   }
 
+  const existingSlugs = await loadExistingAbilitySlugs();
+  const abilityProposals = dedupeAbilityProposals(
+    proposeAbilitiesFromEvidence(evidence),
+    existingSlugs,
+  );
+
   const current = await getActiveSeasonSkill();
   const before = scoreSkill(current.content, evidence);
   const llmOps = await proposeEditsWithLlm(current.content, evidence);
   const ops = llmOps?.length ? llmOps : proposeHeuristicEdits(evidence);
+  const workflowBullets = workflowBulletsForMerge(abilityProposals);
 
-  if (ops.length === 0) {
+  if (ops.length === 0 && abilityProposals.length === 0) {
     return {
       skipped: true,
-      reason: "No edits proposed",
+      reason: "No edits or abilities proposed",
       fromVersion: current.version,
       gateBefore: before.score,
       costEstimateUsd: llmOps ? 0.05 : 0,
     };
   }
 
-  const candidate = applyBoundedEdits(current.content, ops);
+  let candidate = applyBoundedEdits(current.content, ops);
+  candidate = mergeWorkflowBullets(candidate, workflowBullets);
   const after = scoreSkill(candidate, evidence);
   const admin = createAdminClient();
   const costEstimateUsd = llmOps ? 0.15 : 0.01;
@@ -309,8 +457,46 @@ export async function runSeasonSkillSleep(opts?: {
     return { skipped: true, reason: "Budget cap", costEstimateUsd };
   }
 
+  const gatePassed = after.score > before.score + 0.005;
+  const mergedWorkflowSlugs = new Set(
+    abilityProposals
+      .filter((p) => p.abilityKind === "workflow" && p.skillBullet?.trim())
+      .map((p) => p.slug),
+  );
+
+  // Skill versioning only when content changed vs current.
+  const skillChanged = candidate.trim() !== current.content.trim();
+
+  // Persist abilities even when skill gate fails (proposed for admin review).
+  // When gate passes and skill promotes, also accept matching proposed workflows.
+  const abilityStats = await persistAbilityProposals({
+    proposals: abilityProposals,
+    gatePassed: gatePassed && skillChanged,
+    mergedWorkflowSlugs,
+    sleepAt,
+    promotedSkillContent:
+      gatePassed && skillChanged ? candidate : null,
+  });
+
+  if (!skillChanged) {
+    return {
+      skipped: abilityProposals.length === 0,
+      reason:
+        abilityProposals.length === 0
+          ? "Skill content unchanged and no abilities"
+          : "Skill unchanged; abilities catalogued",
+      accepted: false,
+      fromVersion: current.version,
+      gateBefore: before.score,
+      gateAfter: after.score,
+      costEstimateUsd,
+      abilitiesProposed: abilityStats.proposed,
+      abilitiesAccepted: abilityStats.accepted,
+    };
+  }
+
   const nextVersion = await getNextSeasonSkillVersion();
-  const accepted = after.score > before.score + 0.005;
+  const accepted = gatePassed;
 
   await admin.from("agent_skills").insert({
     kind: SEASON_SKILL_KIND,
@@ -322,6 +508,10 @@ export async function runSeasonSkillSleep(opts?: {
       gateBefore: before,
       gateAfter: after,
       ops,
+      abilities: abilityProposals.map((p) => ({
+        slug: p.slug,
+        abilityKind: p.abilityKind,
+      })),
       evidence: {
         turnCount: evidence.turnCount,
         resolvedRecs: evidence.resolvedRecs,
@@ -367,6 +557,7 @@ export async function runSeasonSkillSleep(opts?: {
       resolvedRecs: evidence.resolvedRecs,
       breakdownBefore: before.breakdown,
       breakdownAfter: after.breakdown,
+      abilities: abilityProposals.map((p) => p.slug),
     },
   });
 
@@ -387,5 +578,7 @@ export async function runSeasonSkillSleep(opts?: {
     gateBefore: before.score,
     gateAfter: after.score,
     costEstimateUsd,
+    abilitiesProposed: abilityStats.proposed,
+    abilitiesAccepted: abilityStats.accepted,
   };
 }

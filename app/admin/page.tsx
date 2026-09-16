@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { isAdminEmail } from "@/lib/admin/allowlist";
 import { loadSeasonMonitorSnapshot } from "@/lib/admin/season-monitor";
 import { ForceSleepButton } from "@/components/admin/force-sleep-button";
+import { AbilityDecisionButtons } from "@/components/admin/ability-decision-buttons";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 
 function pct(n: number | null): string {
@@ -89,10 +90,77 @@ export default async function AdminPage() {
           <CardTitle>Force sleep</CardTitle>
           <CardDescription>
             Run SkillOpt-Sleep now (force=true). Promotes only if gate improves.
+            Workflow abilities may auto-accept; tool/schema stay proposed.
           </CardDescription>
         </CardHeader>
         <CardContent>
           <ForceSleepButton />
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Ability catalog</CardTitle>
+          <CardDescription>
+            Sleep proposals. Approve tool/schema for backlog only (no codegen).
+            Workflows auto-accept when the skill gate passes.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {snapshot.abilities.length === 0 ? (
+            <p className="text-sm text-slate-500">No abilities proposed yet.</p>
+          ) : (
+            snapshot.abilities.map((a) => (
+              <div
+                key={a.id}
+                className="rounded-md border border-slate-800 bg-slate-950/40 p-3 text-xs"
+              >
+                <div className="flex flex-wrap items-center gap-2 text-slate-300">
+                  <span className="font-medium text-slate-100">{a.title}</span>
+                  <span className="font-mono text-slate-500">{a.slug}</span>
+                  <span className="rounded bg-slate-800 px-1.5 py-0.5 text-slate-300">
+                    {a.ability_kind}
+                  </span>
+                  <span
+                    className={
+                      a.status === "accepted" || a.status === "approved"
+                        ? "text-emerald-400"
+                        : a.status === "rejected"
+                          ? "text-rose-400"
+                          : "text-amber-400"
+                    }
+                  >
+                    {a.status}
+                  </span>
+                  <span className="text-slate-600">
+                    {new Date(a.created_at).toLocaleString()}
+                  </span>
+                </div>
+                <p className="mt-1 text-slate-400">{a.description}</p>
+                {a.skill_bullet ? (
+                  <pre className="mt-2 max-h-24 overflow-auto whitespace-pre-wrap text-[11px] text-slate-500">
+                    {a.skill_bullet}
+                  </pre>
+                ) : null}
+                {a.ability_kind !== "workflow" ? (
+                  <pre className="mt-2 max-h-28 overflow-auto whitespace-pre-wrap break-all text-[11px] text-slate-500">
+                    {JSON.stringify(a.spec_json, null, 2)}
+                  </pre>
+                ) : null}
+                {a.status === "proposed" &&
+                (a.ability_kind === "tool" || a.ability_kind === "schema") ? (
+                  <div className="mt-2">
+                    <AbilityDecisionButtons abilityId={a.id} />
+                  </div>
+                ) : null}
+                {a.decided_by ? (
+                  <p className="mt-1 text-[10px] text-slate-600">
+                    decided by {a.decided_by}
+                  </p>
+                ) : null}
+              </div>
+            ))
+          )}
         </CardContent>
       </Card>
 
