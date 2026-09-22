@@ -2,6 +2,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import {
   computeSeasonCompositeScore,
   scoreSkillAgainstFixtures,
+  sessionDepthScore,
 } from "@/lib/agent/season-eval";
 import {
   getActiveSeasonSkill,
@@ -20,6 +21,8 @@ const MIN_EVIDENCE_TURNS = 5;
 const MIN_RESOLVED_RECS = 3;
 const MAX_EDIT_OPS = 4;
 const DEFAULT_BUDGET_USD = 12;
+/** Minimum fixture lift required to promote a candidate skill. */
+const FIXTURE_ACCEPT_DELTA = 0.005;
 
 export interface SkillSleepResult {
   skipped?: boolean;
@@ -29,6 +32,8 @@ export interface SkillSleepResult {
   toVersion?: number;
   gateBefore?: number;
   gateAfter?: number;
+  fixtureBefore?: number;
+  fixtureAfter?: number;
   costEstimateUsd?: number;
   abilitiesProposed?: number;
   abilitiesAccepted?: number;
@@ -36,14 +41,76 @@ export interface SkillSleepResult {
 
 interface EvidenceBundle {
   thumbsUpRate: number | null;
+  thumbsDownRate: number | null;
+  feedbackCount: number;
+  feedbackCoverage: number | null;
+  continuedTurnRate: number | null;
+  avgUserTurnsPerSession: number | null;
+  sessionDepthScore: number | null;
   recommendationHitRate: number | null;
   followUpRate: number | null;
   latencyScore: number | null;
   toolSuccessRate: number | null;
   failureNotes: string[];
+  chanceNotes: string[];
+  infoGapNotes: string[];
   successNotes: string[];
   turnCount: number;
   resolvedRecs: number;
+  skillGapCount: number;
+  chanceCount: number;
+  lackOfInfoCount: number;
+}
+
+async function harvestPassiveEngagement(
+  admin: ReturnType<typeof createAdminClient>,
+  sessionIds: string[],
+): Promise<{
+  continuedTurnRate: number | null;
+  avgUserTurnsPerSession: number | null;
+}> {
+  if (sessionIds.length === 0) {
+    return { continuedTurnRate: null, avgUserTurnsPerSession: null };
+  }
+
+  const { data: messages } = await admin
+    .from("league_agent_messages")
+    .select("session_id, role, sort_order")
+    .in("session_id", sessionIds.slice(0, 100))
+    .order("sort_order", { ascending: true });
+
+  const bySession = new Map<string, { role: string; sort_order: number }[]>();
+  for (const m of messages ?? []) {
+    const sid = String(m.session_id);
+    const list = bySession.get(sid) ?? [];
+    list.push({ role: String(m.role), sort_order: Number(m.sort_order) });
+    bySession.set(sid, list);
+  }
+
+  let assistantReplies = 0;
+  let continued = 0;
+  let userTurnSum = 0;
+  let sessionN = 0;
+
+  for (const rows of bySession.values()) {
+    const sorted = [...rows].sort((a, b) => a.sort_order - b.sort_order);
+    const userTurns = sorted.filter((r) => r.role === "user").length;
+    if (userTurns > 0) {
+      userTurnSum += userTurns;
+      sessionN += 1;
+    }
+    for (let i = 0; i < sorted.length; i++) {
+      if (sorted[i].role !== "assistant") continue;
+      assistantReplies += 1;
+      if (sorted.slice(i + 1).some((r) => r.role === "user")) continued += 1;
+    }
+  }
+
+  return {
+    continuedTurnRate:
+      assistantReplies > 0 ? continued / assistantReplies : null,
+    avgUserTurnsPerSession: sessionN > 0 ? userTurnSum / sessionN : null,
+  };
 }
 
 async function harvestEvidence(sinceDays = 14): Promise<EvidenceBundle> {
@@ -53,7 +120,7 @@ async function harvestEvidence(sinceDays = 14): Promise<EvidenceBundle> {
   const { data: metrics } = await admin
     .from("agent_turn_metrics")
     .select(
-      "latency_ms, tool_count, tool_error_count, follow_up_required, message_id",
+      "latency_ms, tool_count, tool_error_count, follow_up_required, message_id, session_id",
     )
     .eq("agent_kind", "season")
     .gte("created_at", since)
@@ -79,39 +146,82 @@ async function harvestEvidence(sinceDays = 14): Promise<EvidenceBundle> {
 
   const messageIds = turns.map((t) => t.message_id).filter(Boolean);
   let thumbsUpRate: number | null = null;
+  let thumbsDownRate: number | null = null;
+  let feedbackCount = 0;
   if (messageIds.length > 0) {
     const { data: feedback } = await admin
       .from("agent_message_feedback")
       .select("rating")
       .in("message_id", messageIds.slice(0, 200));
     const fb = feedback ?? [];
+    feedbackCount = fb.length;
     if (fb.length > 0) {
-      thumbsUpRate = fb.filter((f) => f.rating === "up").length / fb.length;
+      const ups = fb.filter((f) => f.rating === "up").length;
+      const downs = fb.filter((f) => f.rating === "down").length;
+      thumbsUpRate = ups / fb.length;
+      thumbsDownRate = downs / fb.length;
     }
   }
 
+  const sessionIds = [
+    ...new Set(turns.map((t) => t.session_id).filter(Boolean).map(String)),
+  ];
+  const passive = await harvestPassiveEngagement(admin, sessionIds);
+
   const { data: recs } = await admin
     .from("agent_recommendations")
-    .select("status, failure_tags, outcome_notes, claim_type")
+    .select(
+      "status, failure_tags, outcome_notes, claim_type, rca_category, rca_notes",
+    )
     .eq("agent_kind", "season")
-    .in("status", ["validated", "invalidated"])
+    .in("status", ["validated", "invalidated", "inconclusive"])
     .gte("resolved_at", since)
     .limit(200);
 
   const resolved = recs ?? [];
-  const validated = resolved.filter((r) => r.status === "validated").length;
+  const decided = resolved.filter(
+    (r) => r.status === "validated" || r.status === "invalidated",
+  );
+  const validated = decided.filter((r) => r.status === "validated").length;
   const recommendationHitRate =
-    resolved.length > 0 ? validated / resolved.length : null;
+    decided.length > 0 ? validated / decided.length : null;
 
-  const failureNotes = resolved
-    .filter((r) => r.status === "invalidated")
+  // Only skill_gap failures should drive skill edits; chance / missing info do not.
+  const skillGapRows = resolved.filter(
+    (r) =>
+      r.status === "invalidated" &&
+      (r.rca_category === "skill_gap" ||
+        (!r.rca_category &&
+          Array.isArray(r.failure_tags) &&
+          (r.failure_tags as string[]).includes("bench_outscored_starter"))),
+  );
+  const chanceRows = resolved.filter((r) => r.rca_category === "chance");
+  const infoGapRows = resolved.filter(
+    (r) => r.rca_category === "lack_of_information",
+  );
+
+  const failureNotes = skillGapRows
     .slice(0, 12)
     .map(
       (r) =>
-        `${r.claim_type}: ${r.outcome_notes ?? "invalidated"} tags=${JSON.stringify(r.failure_tags ?? [])}`,
+        `${r.claim_type} [skill_gap]: ${r.rca_notes ?? r.outcome_notes ?? "invalidated"} tags=${JSON.stringify(r.failure_tags ?? [])}`,
     );
 
-  const successNotes = resolved
+  const chanceNotes = chanceRows
+    .slice(0, 6)
+    .map(
+      (r) =>
+        `${r.claim_type} [chance]: ${r.rca_notes ?? r.outcome_notes ?? "variance"}`,
+    );
+
+  const infoGapNotes = infoGapRows
+    .slice(0, 6)
+    .map(
+      (r) =>
+        `${r.claim_type} [lack_of_information]: ${r.rca_notes ?? r.outcome_notes ?? "missing data"}`,
+    );
+
+  const successNotes = decided
     .filter((r) => r.status === "validated")
     .slice(0, 8)
     .map((r) => `${r.claim_type}: ${r.outcome_notes ?? "validated"}`);
@@ -127,19 +237,30 @@ async function harvestEvidence(sinceDays = 14): Promise<EvidenceBundle> {
 
   return {
     thumbsUpRate,
+    thumbsDownRate,
+    feedbackCount,
+    feedbackCoverage: turnCount > 0 ? feedbackCount / turnCount : null,
+    continuedTurnRate: passive.continuedTurnRate,
+    avgUserTurnsPerSession: passive.avgUserTurnsPerSession,
+    sessionDepthScore: sessionDepthScore(passive.avgUserTurnsPerSession),
     recommendationHitRate,
     followUpRate: turnCount > 0 ? followUps / turnCount : null,
     latencyScore,
     toolSuccessRate,
     failureNotes,
+    chanceNotes,
+    infoGapNotes,
     successNotes,
     turnCount,
-    resolvedRecs: resolved.length,
+    resolvedRecs: decided.length,
+    skillGapCount: skillGapRows.length,
+    chanceCount: chanceRows.length,
+    lackOfInfoCount: infoGapRows.length,
   };
 }
 
 type EditOp =
-  | { op: "add"; text: string }
+  | { op: "add"; text: string; match?: string }
   | { op: "delete"; match: string }
   | { op: "replace"; match: string; text: string };
 
@@ -147,7 +268,13 @@ function applyBoundedEdits(content: string, ops: EditOp[]): string {
   let out = content;
   for (const op of ops.slice(0, MAX_EDIT_OPS)) {
     if (op.op === "add") {
-      out = `${out.trim()}\n\n${op.text.trim()}`;
+      const addition = op.text.trim();
+      if (!addition) continue;
+      if (op.match && out.includes(op.match)) {
+        out = out.replace(op.match, `${op.match}\n\n${addition}`);
+      } else {
+        out = `${out.trim()}\n\n${addition}`;
+      }
     } else if (op.op === "delete" && op.match && out.includes(op.match)) {
       out = out.replace(op.match, "");
     } else if (op.op === "replace" && op.match && out.includes(op.match)) {
@@ -223,13 +350,25 @@ async function proposeEditsWithLlm(
         role: "user",
         content: JSON.stringify({
           currentSkill: skillContent.slice(0, 6000),
-          failures: evidence.failureNotes,
+          skillGapFailures: evidence.failureNotes,
+          chanceFailures: evidence.chanceNotes,
+          lackOfInformation: evidence.infoGapNotes,
           successes: evidence.successNotes,
+          guidance:
+            "Only propose skill edits for skillGapFailures. Do not change the skill for chanceFailures (variance) or lackOfInformation (missing data).",
           metrics: {
             thumbsUpRate: evidence.thumbsUpRate,
+            thumbsDownRate: evidence.thumbsDownRate,
+            feedbackCount: evidence.feedbackCount,
+            feedbackCoverage: evidence.feedbackCoverage,
+            continuedTurnRate: evidence.continuedTurnRate,
+            sessionDepthScore: evidence.sessionDepthScore,
             recommendationHitRate: evidence.recommendationHitRate,
             followUpRate: evidence.followUpRate,
             toolSuccessRate: evidence.toolSuccessRate,
+            skillGapCount: evidence.skillGapCount,
+            chanceCount: evidence.chanceCount,
+            lackOfInfoCount: evidence.lackOfInfoCount,
           },
         }),
       },
@@ -269,14 +408,20 @@ async function proposeEditsWithLlm(
 
 function scoreSkill(content: string, evidence: EvidenceBundle) {
   const fixtures = scoreSkillAgainstFixtures(content);
-  return computeSeasonCompositeScore({
+  const composite = computeSeasonCompositeScore({
     thumbsUpRate: evidence.thumbsUpRate,
+    feedbackCount: evidence.feedbackCount,
+    turnCount: evidence.turnCount,
+    thumbsDownRate: evidence.thumbsDownRate,
     recommendationHitRate: evidence.recommendationHitRate,
     followUpRate: evidence.followUpRate,
     latencyScore: evidence.latencyScore,
     toolSuccessRate: evidence.toolSuccessRate,
+    continuedTurnRate: evidence.continuedTurnRate,
+    sessionDepthScore: evidence.sessionDepthScore,
     fixtureScore: fixtures.average,
   });
+  return { ...composite, fixtureScore: fixtures.average };
 }
 
 async function loadExistingAbilitySlugs(): Promise<Set<string>> {
@@ -457,7 +602,8 @@ export async function runSeasonSkillSleep(opts?: {
     return { skipped: true, reason: "Budget cap", costEstimateUsd };
   }
 
-  const gatePassed = after.score > before.score + 0.005;
+  const gatePassed =
+    after.fixtureScore > before.fixtureScore + FIXTURE_ACCEPT_DELTA;
   const mergedWorkflowSlugs = new Set(
     abilityProposals
       .filter((p) => p.abilityKind === "workflow" && p.skillBullet?.trim())
@@ -496,7 +642,10 @@ export async function runSeasonSkillSleep(opts?: {
   }
 
   const nextVersion = await getNextSeasonSkillVersion();
-  const accepted = gatePassed;
+  // Live engagement metrics are identical before/after a text-only edit.
+  // Promote only when held-out fixture coverage improves.
+  const accepted =
+    after.fixtureScore > before.fixtureScore + FIXTURE_ACCEPT_DELTA;
 
   await admin.from("agent_skills").insert({
     kind: SEASON_SKILL_KIND,
@@ -507,6 +656,8 @@ export async function runSeasonSkillSleep(opts?: {
     metrics_json: {
       gateBefore: before,
       gateAfter: after,
+      fixtureBefore: before.fixtureScore,
+      fixtureAfter: after.fixtureScore,
       ops,
       abilities: abilityProposals.map((p) => ({
         slug: p.slug,
@@ -516,7 +667,15 @@ export async function runSeasonSkillSleep(opts?: {
         turnCount: evidence.turnCount,
         resolvedRecs: evidence.resolvedRecs,
         thumbsUpRate: evidence.thumbsUpRate,
+        thumbsDownRate: evidence.thumbsDownRate,
+        feedbackCount: evidence.feedbackCount,
+        feedbackCoverage: evidence.feedbackCoverage,
+        continuedTurnRate: evidence.continuedTurnRate,
+        sessionDepthScore: evidence.sessionDepthScore,
         recommendationHitRate: evidence.recommendationHitRate,
+        skillGapCount: evidence.skillGapCount,
+        chanceCount: evidence.chanceCount,
+        lackOfInfoCount: evidence.lackOfInfoCount,
       },
     },
   });
@@ -548,13 +707,25 @@ export async function runSeasonSkillSleep(opts?: {
     from_version: current.version,
     to_version: nextVersion,
     proposed_ops: ops,
-    gate_score_before: before.score,
-    gate_score_after: after.score,
+    gate_score_before: before.fixtureScore,
+    gate_score_after: after.fixtureScore,
     accepted,
-    reject_reason: accepted ? null : "Held-out gate did not improve",
+    reject_reason: accepted
+      ? null
+      : "Held-out fixture coverage did not improve",
     evidence_summary: {
       turnCount: evidence.turnCount,
       resolvedRecs: evidence.resolvedRecs,
+      thumbsUpRate: evidence.thumbsUpRate,
+      thumbsDownRate: evidence.thumbsDownRate,
+      feedbackCount: evidence.feedbackCount,
+      continuedTurnRate: evidence.continuedTurnRate,
+      sessionDepthScore: evidence.sessionDepthScore,
+      skillGapCount: evidence.skillGapCount,
+      chanceCount: evidence.chanceCount,
+      lackOfInfoCount: evidence.lackOfInfoCount,
+      healthBefore: before.score,
+      healthAfter: after.score,
       breakdownBefore: before.breakdown,
       breakdownAfter: after.breakdown,
       abilities: abilityProposals.map((p) => p.slug),
@@ -575,8 +746,10 @@ export async function runSeasonSkillSleep(opts?: {
     accepted,
     fromVersion: current.version,
     toVersion: nextVersion,
-    gateBefore: before.score,
-    gateAfter: after.score,
+    gateBefore: before.fixtureScore,
+    gateAfter: after.fixtureScore,
+    fixtureBefore: before.fixtureScore,
+    fixtureAfter: after.fixtureScore,
     costEstimateUsd,
     abilitiesProposed: abilityStats.proposed,
     abilitiesAccepted: abilityStats.accepted,
