@@ -53,6 +53,24 @@ export const SEASON_GOLDEN_FIXTURES: SeasonGoldenFixture[] = [
     weight: 0.8,
   },
   {
+    id: "injury-cross-check",
+    prompt: "Lock my start/sit before kickoff — anyone hurt?",
+    mustMention: ["injury", "web_search"],
+    weight: 1,
+  },
+  {
+    id: "verify-active-week",
+    prompt: "Who should I start?",
+    mustMention: ["active week", "get_my_roster"],
+    weight: 1.1,
+  },
+  {
+    id: "cite-week-season",
+    prompt: "Cite the projection sources you used",
+    mustMention: ["season year", "week"],
+    weight: 0.9,
+  },
+  {
     id: "read-only",
     prompt: "Set my lineup on ESPN",
     mustMention: ["read-only"],
@@ -115,16 +133,57 @@ export function scoreSkillAgainstFixtures(
   };
 }
 
-/** Composite gate used by SkillOpt-Sleep. */
+/**
+ * Shrink sparse explicit feedback toward neutral so a handful of thumbs
+ * (especially all-downs) cannot dominate health scoring.
+ */
+export function effectiveThumbsScore(
+  thumbsUpRate: number | null,
+  feedbackCount: number,
+  turnCount: number,
+): number {
+  if (feedbackCount <= 0 || thumbsUpRate == null) return 0.5;
+  const minForFullWeight = Math.max(8, Math.ceil(turnCount * 0.35));
+  const coverage = Math.min(1, feedbackCount / minForFullWeight);
+  return 0.5 + (thumbsUpRate - 0.5) * coverage;
+}
+
+/** Normalize average user turns/session into 0..1 (2 turns ≈ 0.33, 4+ ≈ 1). */
+export function sessionDepthScore(avgUserTurnsPerSession: number | null): number {
+  if (avgUserTurnsPerSession == null || avgUserTurnsPerSession <= 0) return 0.4;
+  return Math.max(0, Math.min(1, (avgUserTurnsPerSession - 1) / 3));
+}
+
+/**
+ * Composite health score for dashboards / optimizer context.
+ * Live parts are observational (same before/after a text-only skill edit).
+ * SkillOpt-Sleep acceptance should gate on fixtureScore alone.
+ */
 export function computeSeasonCompositeScore(parts: {
   thumbsUpRate: number | null;
+  feedbackCount?: number | null;
+  turnCount?: number | null;
+  thumbsDownRate?: number | null;
   recommendationHitRate: number | null;
   followUpRate: number | null;
   latencyScore: number | null;
   toolSuccessRate: number | null;
+  /** Passive: assistant replies that got another user message in-session. */
+  continuedTurnRate?: number | null;
+  /** Passive: normalized session depth. */
+  sessionDepthScore?: number | null;
   fixtureScore: number;
 }): { score: number; breakdown: Record<string, number> } {
-  const thumbs = parts.thumbsUpRate ?? 0.5;
+  const turnCount = parts.turnCount ?? 0;
+  const feedbackCount = parts.feedbackCount ?? 0;
+  const thumbs = effectiveThumbsScore(
+    parts.thumbsUpRate,
+    feedbackCount,
+    turnCount,
+  );
+  const continued = parts.continuedTurnRate ?? 0.45;
+  const depth = parts.sessionDepthScore ?? 0.4;
+  const passive = 0.65 * continued + 0.35 * depth;
   const recs = parts.recommendationHitRate ?? 0.5;
   const followUps = 1 - (parts.followUpRate ?? 0.2);
   const latency = parts.latencyScore ?? 0.7;
@@ -132,12 +191,13 @@ export function computeSeasonCompositeScore(parts: {
   const fixtures = parts.fixtureScore;
 
   const breakdown = {
-    thumbs: 0.25 * thumbs,
-    recommendations: 0.2 * recs,
-    followUps: 0.15 * followUps,
-    latency: 0.1 * latency,
-    tools: 0.1 * tools,
-    fixtures: 0.2 * fixtures,
+    passive: 0.28 * passive,
+    thumbs: 0.1 * thumbs,
+    recommendations: 0.15 * recs,
+    followUps: 0.1 * followUps,
+    latency: 0.05 * latency,
+    tools: 0.07 * tools,
+    fixtures: 0.25 * fixtures,
   };
 
   const score = Object.values(breakdown).reduce((a, b) => a + b, 0);
