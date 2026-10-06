@@ -98,6 +98,13 @@ export function invalidateSeasonSkillCache() {
   cached = null;
 }
 
+export const SEASON_RUNTIME_TOOL_DELTA = [
+  "Runtime tool notes (always apply):",
+  "For named waiver/start debates call evaluate_players — it returns current-week FP+ESPN projections, this-season recentAvg, and dataFlags.",
+  "Do not use board get_player/query_players projPoints as current-week projections.",
+  "When FP week proj is missing or ROS conflicts with recent ESPN form, flag the data conflict; do not dismiss the player.",
+].join(" ");
+
 /** Render skill markdown with runtime placeholders. */
 export function renderSeasonSkill(
   content: string,
@@ -106,6 +113,10 @@ export function renderSeasonSkill(
   let out = content.replaceAll("{{leagueId}}", params.leagueId);
   if (params.workingLineupBlock) {
     out = `${out.trim()}\n\n${params.workingLineupBlock}`;
+  }
+  // Always append so older DB-stored skills pick up critical tool workflows.
+  if (!out.toLowerCase().includes("evaluate_players")) {
+    out = `${out.trim()}\n\n${SEASON_RUNTIME_TOOL_DELTA}`;
   }
   return out.trim();
 }

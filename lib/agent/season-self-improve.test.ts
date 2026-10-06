@@ -43,6 +43,9 @@ describe("season-eval fixtures", () => {
       "read-only",
       "Completed week fantasy scores",
       "season year",
+      "evaluate_players",
+      "data conflict",
+      "current-week",
     ].join("\n");
     const strong = `${weak}\nAlways verify the active week number.\nCross-check injury via web_search before finalizing.`;
     const before = scoreSkillAgainstFixtures(weak).average;
@@ -119,9 +122,19 @@ describe("recommendation-ledger helpers", () => {
 });
 
 describe("renderSeasonSkill", () => {
-  it("injects league id", () => {
-    expect(renderSeasonSkill("League id: {{leagueId}}.", { leagueId: "abc" })).toBe(
-      "League id: abc.",
+  it("injects league id and appends runtime notes for older skills", () => {
+    const out = renderSeasonSkill("League id: {{leagueId}}.", { leagueId: "abc" });
+    expect(out.startsWith("League id: abc.")).toBe(true);
+    expect(out).toContain("evaluate_players");
+    expect(out).toContain("data conflict");
+  });
+
+  it("does not duplicate runtime notes when skill already mentions evaluate_players", () => {
+    const out = renderSeasonSkill(
+      "League {{leagueId}}. Use evaluate_players for waivers.",
+      { leagueId: "xyz" },
     );
+    expect(out).toBe("League xyz. Use evaluate_players for waivers.");
+    expect(out.match(/evaluate_players/g)?.length).toBe(1);
   });
 });

@@ -6,6 +6,11 @@ import { buildSeasonPlayerRows } from "@/lib/agent/player-query";
 import { fetchFreeAgents, fetchLeagueBundle, rosterSlotsFromLeague, userTeam } from "@/lib/league/data";
 import { fetchConsistencyByEspnIds } from "@/lib/league/consistency-data";
 import {
+  evaluateLeaguePlayers,
+  fetchFreeAgentFormByFpIds,
+} from "@/lib/league/player-eval-data";
+import { detectPlayerDataFlags } from "@/lib/analytics/player-eval";
+import {
   fetchDefenseMatchups,
   fetchOpponentForTeam,
   loadSeasonAnalysisRows,
@@ -203,24 +208,109 @@ export function createLeagueTools(
     async (input) => {
       const bundle = await fetchLeagueBundle(leagueId);
       if (!bundle) return json({ error: "League not found" });
+      const currentWeek =
+        bundle.league.current_week && bundle.league.current_week > 0
+          ? bundle.league.current_week
+          : null;
       let fas = await fetchFreeAgents({
         leagueId,
         season: bundle.league.season,
         scoring: bundle.league.scoring,
-        week: bundle.league.current_week,
+        week: currentWeek,
         limit: input.limit ?? 40,
       });
       if (input.position) {
         fas = fas.filter((f) => f.position === input.position);
       }
-      return json({ count: fas.length, freeAgents: fas });
+      const formByFp = await fetchFreeAgentFormByFpIds({
+        leagueId,
+        season: bundle.league.season,
+        currentWeek,
+        fpPlayerIds: fas.map((f) => f.fpPlayerId),
+      });
+      const freeAgents = fas.map((f) => {
+        const form = formByFp.get(f.fpPlayerId);
+        const flags =
+          form != null
+            ? detectPlayerDataFlags({
+                currentWeek,
+                fpWeekProj: f.weekProj,
+                fpRosProj: f.rosProj,
+                espnWeekProj: form.espnWeekProj,
+                seasonWeeksActuals: form.seasonWeeksActuals,
+              })
+            : f.weekProj == null && currentWeek != null
+              ? {
+                  flags: ["missing_fp_week_proj"] as const,
+                  notes: [
+                    `No FantasyPros week ${currentWeek} projection and no ESPN pool row — sync ESPN full or call evaluate_players after sync.`,
+                  ],
+                }
+              : { flags: [] as const, notes: [] as string[] };
+        return {
+          ...f,
+          espnPlayerId: form?.espnPlayerId ?? null,
+          espnWeekProj: form?.espnWeekProj ?? null,
+          recentAvg: form?.recentAvg ?? null,
+          seasonAvg: form?.seasonAvg ?? null,
+          seasonGames: form?.seasonGames ?? null,
+          recentWeeks: form?.recentWeeks ?? [],
+          percentOwned: form?.percentOwned ?? null,
+          dataFlags: [...flags.flags],
+          dataNotes: flags.notes,
+        };
+      });
+      return json({
+        season: bundle.league.season,
+        currentWeek,
+        note:
+          "Includes FantasyPros week/ROS plus ESPN recent form when synced. Prefer evaluate_players for named comparisons; flag dataConflicts instead of dismissing players.",
+        count: freeAgents.length,
+        freeAgents,
+      });
     },
     {
       name: "query_free_agents",
-      description: "Unrostered players with week/ROS FantasyPros projections.",
+      description:
+        "Unrostered players with current-week FP/ESPN projections and recent ESPN season form (flags data conflicts).",
       schema: z.object({
         position: z.enum(["QB", "RB", "WR", "TE", "K", "DST"]).optional(),
         limit: z.number().int().min(1).max(80).optional(),
+      }),
+    },
+  );
+
+  const evaluate_players = tool(
+    async (input) => {
+      const result = await evaluateLeaguePlayers({
+        leagueId,
+        espnPlayerIds: input.espnPlayerIds,
+        names: input.names,
+        recentWindow: input.recentWindow,
+        limit: input.limit,
+      });
+      if (result.error && result.players.length === 0) {
+        return json({ error: result.error, season: result.season, currentWeek: result.currentWeek });
+      }
+      return json({
+        season: result.season,
+        currentWeek: result.currentWeek,
+        scoring: result.scoring,
+        note:
+          "Use for in-season add/start decisions. Combines FantasyPros current-week + ROS with ESPN week proj and completed-week actuals. Cite dataFlags when sources conflict; do not dismiss a player solely for missing FP week proj or a stale ROS.",
+        warning: result.error,
+        players: result.players,
+      });
+    },
+    {
+      name: "evaluate_players",
+      description:
+        "Current-week projections + this-season recent form for named/ESPN-id players (rostered or FA). Prefer over get_player for waiver/start evals.",
+      schema: z.object({
+        names: z.array(z.string()).min(1).max(8).optional(),
+        espnPlayerIds: z.array(z.number().int()).min(1).max(8).optional(),
+        recentWindow: z.number().int().min(1).max(6).optional().default(3),
+        limit: z.number().int().min(1).max(12).optional(),
       }),
     },
   );
@@ -380,6 +470,7 @@ export function createLeagueTools(
       if (!bundle) return json({ error: "League not found" });
 
       let espnIds = input.espnPlayerIds ?? [];
+      const nameById = new Map<number, { name: string; position: string | null }>();
       if (espnIds.length === 0 && input.names && input.names.length > 0) {
         const found: number[] = [];
         for (const name of input.names) {
@@ -387,13 +478,32 @@ export function createLeagueTools(
           const row = bundle.rosterEntries.find((r) =>
             r.player_name.toLowerCase().includes(needle),
           );
-          if (row) found.push(row.espn_player_id);
+          if (row) {
+            found.push(row.espn_player_id);
+            nameById.set(row.espn_player_id, {
+              name: row.player_name,
+              position: row.position,
+            });
+          }
+        }
+        // Free agents / non-rostered: resolve via player pool evaluation.
+        if (found.length < (input.names?.length ?? 0)) {
+          const evaled = await evaluateLeaguePlayers({
+            leagueId,
+            names: input.names,
+            limit: 12,
+          });
+          for (const p of evaled.players) {
+            if (!found.includes(p.espnPlayerId)) found.push(p.espnPlayerId);
+            nameById.set(p.espnPlayerId, { name: p.name, position: p.position });
+          }
         }
         espnIds = found;
       }
       if (espnIds.length === 0) {
         return json({
-          error: "Provide espnPlayerIds or names that match league roster players",
+          error:
+            "Provide espnPlayerIds or names that match rostered or pool players (sync ESPN full if pool is empty)",
         });
       }
 
@@ -405,29 +515,31 @@ export function createLeagueTools(
 
       const players = espnIds.map((id) => {
         const row = bundle.rosterEntries.find((r) => r.espn_player_id === id);
+        const meta = nameById.get(id);
+        const name = row?.player_name ?? meta?.name ?? `espn:${id}`;
         const stats = consistencyById.get(id)!;
         return {
           espnPlayerId: id,
-          name: row?.player_name ?? `espn:${id}`,
-          position: row?.position ?? null,
+          name,
+          position: row?.position ?? meta?.position ?? null,
           team: row
             ? bundle.teams.find((t) => t.espn_team_id === row.espn_team_id)?.name ?? null
             : null,
           season: bundle.league.season,
           consistency: stats,
-          summary: summarizeConsistency(row?.player_name ?? `espn:${id}`, stats),
+          summary: summarizeConsistency(name, stats),
         };
       });
 
       return json({
-        note: "Stats from ESPN weekly actual fantasy points (week≥1). Uses current season; pads with prior season if <3 games.",
+        note: "Stats from ESPN weekly actual fantasy points (week≥1). Uses current season; pads with prior season if <3 games. Works for free agents in the synced player pool too.",
         players,
       });
     },
     {
       name: "player_consistency",
       description:
-        "Weekly fantasy-point consistency (mean, σ, CV, floor/ceiling, boom/bust rates) from ESPN actuals for roster players by espnPlayerIds or name.",
+        "Weekly fantasy-point consistency (mean, σ, CV, floor/ceiling, boom/bust rates) from ESPN actuals for roster or free-agent pool players by espnPlayerIds or name.",
       schema: z.object({
         espnPlayerIds: z.array(z.number().int()).min(1).max(12).optional(),
         names: z.array(z.string()).min(1).max(12).optional(),
@@ -646,24 +758,62 @@ export function createLeagueTools(
       if (!bundle) return json({ error: "League not found" });
       const mine = userTeam(bundle);
       if (!mine) return json({ error: "No user team" });
+      const currentWeek =
+        bundle.league.current_week && bundle.league.current_week > 0
+          ? bundle.league.current_week
+          : null;
       const fas = await fetchFreeAgents({
         leagueId,
         season: bundle.league.season,
         scoring: bundle.league.scoring,
-        week: bundle.league.current_week,
+        week: currentWeek,
         limit: 120,
       });
+      const formByFp = await fetchFreeAgentFormByFpIds({
+        leagueId,
+        season: bundle.league.season,
+        currentWeek,
+        fpPlayerIds: fas.map((f) => f.fpPlayerId),
+      });
+      const enriched = fas.map((f) => {
+        const form = formByFp.get(f.fpPlayerId);
+        const flags =
+          form != null
+            ? detectPlayerDataFlags({
+                currentWeek,
+                fpWeekProj: f.weekProj,
+                fpRosProj: f.rosProj,
+                espnWeekProj: form.espnWeekProj,
+                seasonWeeksActuals: form.seasonWeeksActuals,
+              })
+            : { flags: [] as string[], notes: [] as string[] };
+        return {
+          ...f,
+          espnWeekProj: form?.espnWeekProj ?? null,
+          recentAvg: form?.recentAvg ?? null,
+          recentGames: form?.recentWeeks.length ?? null,
+          seasonAvg: form?.seasonAvg ?? null,
+          dataFlags: flags.flags,
+        };
+      });
       const targets = rankWaiverTargets({
-        freeAgents: fas,
+        freeAgents: enriched,
         yourRoster: bundle.rosterEntries.filter((r) => r.espn_team_id === mine.espn_team_id),
         rosterSlots: rosterSlotsFromLeague(bundle.league),
         limit: input.limit ?? 15,
       });
-      return json({ targets });
+      return json({
+        season: bundle.league.season,
+        currentWeek,
+        note:
+          "Ranks by current-week proj (FP then ESPN), recent ESPN form when week proj is missing, and positional need. For named FAs with conflicting sources, call evaluate_players.",
+        targets,
+      });
     },
     {
       name: "waiver_targets",
-      description: "Rank free agents by weekly/ROS projections and your positional need.",
+      description:
+        "Rank free agents by current-week projections, recent ESPN form, ROS, and your positional need.",
       schema: z.object({
         limit: z.number().int().min(1).max(40).optional(),
       }),
@@ -721,6 +871,7 @@ export function createLeagueTools(
     get_team_roster,
     list_teams,
     query_free_agents,
+    evaluate_players,
     suggest_start_sit,
     evaluate_trade,
     player_consistency,
