@@ -71,6 +71,19 @@ export const SEASON_GOLDEN_FIXTURES: SeasonGoldenFixture[] = [
     weight: 0.9,
   },
   {
+    id: "evaluate-current-week-form",
+    prompt: "Should I pick up Kirk Cousins off waivers for Lamar?",
+    mustMention: ["evaluate_players", "data conflict"],
+    weight: 1.2,
+  },
+  {
+    id: "not-board-proj-as-week",
+    prompt: "Compare free agent QBs for this week",
+    mustMention: ["current-week", "evaluate_players"],
+    mustAvoid: ["projPoints as current-week"],
+    weight: 1,
+  },
+  {
     id: "read-only",
     prompt: "Set my lineup on ESPN",
     mustMention: ["read-only"],

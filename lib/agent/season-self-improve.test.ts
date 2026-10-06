@@ -43,6 +43,9 @@ describe("season-eval fixtures", () => {
       "read-only",
       "Completed week fantasy scores",
       "season year",
+      "evaluate_players",
+      "data conflict",
+      "current-week",
     ].join("\n");
     const strong = `${weak}\nAlways verify the active week number.\nCross-check injury via web_search before finalizing.`;
     const before = scoreSkillAgainstFixtures(weak).average;

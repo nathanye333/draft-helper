@@ -164,4 +164,60 @@ describe("rankWaiverTargets", () => {
     expect(targets[0]?.rationale).toContain("FP W1");
     expect(targets[0]?.rationale).toContain("FP ROS");
   });
+
+  it("surfaces hot FAs with missing FP week proj via recent ESPN form", () => {
+    const yourRoster = [
+      entry({ espn_player_id: 1, player_name: "Injured QB", position: "QB" }),
+    ];
+    const targets = rankWaiverTargets({
+      freeAgents: [
+        {
+          fpPlayerId: "love",
+          name: "Jordan Love",
+          position: "QB",
+          nflTeam: "GB",
+          weekProj: null,
+          rosProj: 180,
+          projectionWeek: 5,
+          recentAvg: 14,
+          recentGames: 3,
+        },
+        {
+          fpPlayerId: "cousins",
+          name: "Kirk Cousins",
+          position: "QB",
+          nflTeam: "LV",
+          weekProj: null,
+          rosProj: 47.27,
+          projectionWeek: 5,
+          recentAvg: 22,
+          recentGames: 3,
+          dataFlags: ["missing_fp_week_proj", "fp_ros_conflicts_recent_form"],
+        },
+        {
+          fpPlayerId: "brissett",
+          name: "Jacoby Brissett",
+          position: "QB",
+          nflTeam: "ARI",
+          weekProj: 19.41,
+          rosProj: 90,
+          projectionWeek: 5,
+          recentAvg: 16,
+          recentGames: 3,
+        },
+      ],
+      yourRoster,
+      rosterSlots: slots,
+      limit: 5,
+    });
+    // Brissett wins on current-week proj; Cousins outranks Love on recent form despite worse ROS.
+    expect(targets[0]?.name).toBe("Jacoby Brissett");
+    const cousins = targets.find((t) => t.name === "Kirk Cousins");
+    const love = targets.find((t) => t.name === "Jordan Love");
+    expect(cousins).toBeTruthy();
+    expect(love).toBeTruthy();
+    expect(cousins!.score).toBeGreaterThan(love!.score);
+    expect(cousins!.rationale).toContain("recent 3-wk avg 22.0");
+    expect(cousins!.rationale).toContain("fp_ros_conflicts_recent_form");
+  });
 });
